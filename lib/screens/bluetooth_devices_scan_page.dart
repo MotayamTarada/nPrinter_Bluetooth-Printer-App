@@ -17,7 +17,9 @@ class BluetoothDevicesScanPage extends StatefulWidget {
 
 class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
   final List<BluetoothInfo> _devices = <BluetoothInfo>[];
+  final TextEditingController _searchController = TextEditingController();
   bool _isLoading = false;
+  String _searchQuery = '';
 
   bool get _isSupported =>
       !kIsWeb &&
@@ -39,10 +41,41 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
     return normalized.contains('B300') || normalized.contains('B380');
   }
 
+  String _normalizeMac(String mac) {
+    return mac.trim().replaceAll('-', ':').toUpperCase();
+  }
+
+  bool _matchesSearch(BluetoothInfo device) {
+    if (_searchQuery.trim().isEmpty) {
+      return true;
+    }
+    final query = _searchQuery.trim().toLowerCase();
+    final name = _deviceDisplayName(device).toLowerCase();
+    final mac = _normalizeMac(device.macAdress).toLowerCase();
+    return name.contains(query) || mac.contains(query);
+  }
+
+  List<BluetoothInfo> get _filteredDevices {
+    return _devices.where(_matchesSearch).toList();
+  }
+
   @override
   void initState() {
     super.initState();
+    _searchController.addListener(() {
+      final value = _searchController.text;
+      if (_searchQuery == value) {
+        return;
+      }
+      setState(() => _searchQuery = value);
+    });
     _loadDevices();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<bool> _ensurePermissions() async {
@@ -73,20 +106,21 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
         if (mac.isEmpty) {
           continue;
         }
+        final normalizedMac = _normalizeMac(mac);
 
-        final existing = byMac[mac];
+        final existing = byMac[normalizedMac];
         if (existing == null) {
-          byMac[mac] = BluetoothInfo(
+          byMac[normalizedMac] = BluetoothInfo(
             name: device.name,
-            macAdress: mac,
+            macAdress: normalizedMac,
           );
           continue;
         }
 
         if (existing.name.trim().isEmpty && device.name.trim().isNotEmpty) {
-          byMac[mac] = BluetoothInfo(
+          byMac[normalizedMac] = BluetoothInfo(
             name: device.name,
-            macAdress: mac,
+            macAdress: normalizedMac,
           );
         }
       }
@@ -114,6 +148,20 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
       return a.macAdress.compareTo(b.macAdress);
     });
     return merged;
+  }
+
+  Future<List<BluetoothInfo>> _discoverNearbyWithRetry() async {
+    final collected = <BluetoothInfo>[];
+
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final discovered = await AndroidBluetoothDiscoveryService.discover(
+        timeout: Duration(seconds: attempt == 0 ? 10 : 14),
+      );
+      collected.addAll(discovered);
+      await Future<void>.delayed(const Duration(milliseconds: 450));
+    }
+
+    return collected;
   }
 
   Future<void> _loadDevices() async {
@@ -149,8 +197,7 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
 
       if (defaultTargetPlatform == TargetPlatform.android) {
         try {
-          final nearbyDevices =
-              await AndroidBluetoothDiscoveryService.discover();
+          final nearbyDevices = await _discoverNearbyWithRetry();
           finalDevices = _mergeDevices(pairedDevices, nearbyDevices);
         } catch (_) {
           finalDevices = _mergeDevices(pairedDevices, const <BluetoothInfo>[]);
@@ -229,51 +276,98 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
       );
     }
 
-    return ListView.separated(
-      itemCount: _devices.length,
-      separatorBuilder: (_, _) => const Divider(height: 1),
-      itemBuilder: (_, index) {
-        final device = _devices[index];
+    final visibleDevices = _filteredDevices;
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+          child: TextField(
+            controller: _searchController,
+            decoration: InputDecoration(
+              hintText: 'ابحث باسم الجهاز أو MAC',
+              prefixIcon: const Icon(Icons.search_rounded),
+              suffixIcon: _searchQuery.trim().isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: 'مسح البحث',
+                      icon: const Icon(Icons.close_rounded),
+                      onPressed: () {
+                        _searchController.clear();
+                      },
+                    ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+        ),
+        if (visibleDevices.isEmpty)
+          const Expanded(
+            child: Center(
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 24),
+                child: Text(
+                  'لا توجد نتيجة مطابقة للبحث.',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
+          )
+        else
+          Expanded(
+            child: ListView.separated(
+              itemCount: visibleDevices.length,
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (_, index) {
+                final device = visibleDevices[index];
         final deviceName = _deviceDisplayName(device);
         final isPrinter = _isPrinterDeviceName(deviceName);
         final isNPrinterModel = _isNPrinterModelName(deviceName);
 
-        return ListTile(
-          leading: Icon(
-            isPrinter ? Icons.print_rounded : Icons.bluetooth_rounded,
-            color: isPrinter ? Colors.blueGrey : null,
-          ),
-          title: Row(
-            children: [
-              Expanded(child: Text(deviceName)),
-              if (isPrinter)
-                const Icon(
-                  Icons.print_rounded,
-                  size: 18,
-                  color: Colors.blueGrey,
-                ),
-              if (isNPrinterModel) ...[
-                const SizedBox(width: 8),
-                Image.asset(
-                  'assets/images/logo2.png',
-                  height: 16,
-                  fit: BoxFit.contain,
-                  errorBuilder: (_, _, _) => const Text(
-                    'nPrinter',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.blueGrey,
-                    ),
+                return ListTile(
+                  leading: Icon(
+                    isPrinter ? Icons.print_rounded : Icons.bluetooth_rounded,
+                    color: isPrinter ? Colors.blueGrey : null,
                   ),
-                ),
-              ],
-            ],
+                  title: Row(
+                    children: [
+                      Expanded(child: Text(deviceName)),
+                      if (isPrinter)
+                        const Icon(
+                          Icons.print_rounded,
+                          size: 18,
+                          color: Colors.blueGrey,
+                        ),
+                      if (isNPrinterModel) ...[
+                        const SizedBox(width: 8),
+                        Image.asset(
+                          'assets/images/logo2.png',
+                          height: 16,
+                          fit: BoxFit.contain,
+                          errorBuilder: (_, _, _) => const Text(
+                            'nPrinter',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.blueGrey,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  subtitle: Text(
+                    _normalizeMac(device.macAdress),
+                    textDirection: TextDirection.ltr,
+                  ),
+                  onTap: () =>
+                      Navigator.pop(context, _normalizeMac(device.macAdress)),
+                );
+              },
+            ),
           ),
-          subtitle: Text(device.macAdress, textDirection: TextDirection.ltr),
-          onTap: () => Navigator.pop(context, device.macAdress),
-        );
-      },
+      ],
     );
   }
 

@@ -589,26 +589,6 @@ Future<List<int>> _convertPreparedImageToEscPosBytes(
   return bytes;
 }
 
-Future<List<int>> _convertImageToEscPosBytes(
-  ui.Image flutterImage,
-  double paperWidthMm, {
-  bool forceFitToPaperWidth = false,
-  PosAlign align = PosAlign.center,
-  String printerProfile = 'auto',
-}) async {
-  final preparedImage = await _prepareImageForCommand(
-    flutterImage,
-    paperWidthMm,
-    forceFitToPaperWidth: forceFitToPaperWidth,
-    printerProfile: printerProfile,
-  );
-  return _convertPreparedImageToEscPosBytes(
-    preparedImage,
-    paperWidthMm,
-    align: align,
-  );
-}
-
 Future<bool> _printImageByCommandType({
   required String commandType,
   required ui.Image image,
@@ -768,6 +748,7 @@ Future<void> printBluetoothReceipt({
       macPrinterAddress: mac,
     );
     if (!connected) {
+      if (!context.mounted) return;
       _showMessage(context, 'فشل الاتصال بالطابعة عبر البلوتوث');
       return;
     }
@@ -797,6 +778,7 @@ Future<void> printBluetoothReceipt({
       );
       if (!sentChunk) {
         await PrintBluetoothThermal.disconnect;
+        if (!context.mounted) return;
         _showMessage(
           context,
           'فشل إرسال جزء من النص للطابعة. تأكد من وجود ورق وإغلاق الغطاء جيدًا.',
@@ -834,10 +816,13 @@ Future<void> printBluetoothReceipt({
     }
 
     await PrintBluetoothThermal.disconnect;
+    if (!context.mounted) return;
     _showMessage(context, 'تمت الطباعة بنجاح');
   } catch (e) {
     await PrintBluetoothThermal.disconnect;
-    _showMessage(context, 'حدث خطأ أثناء الطباعة: $e');
+    if (context.mounted) {
+      _showMessage(context, 'حدث خطأ أثناء الطباعة: $e');
+    }
   }
 }
 
@@ -890,6 +875,7 @@ Future<void> printBluetoothPdfReceipt({
     );
 
     if (!connected) {
+      if (!context.mounted) return;
       _showMessage(context, 'فشل الاتصال بالطابعة عبر البلوتوث');
       return;
     }
@@ -935,6 +921,7 @@ Future<void> printBluetoothPdfReceipt({
         );
         if (!sentPage) {
           await PrintBluetoothThermal.disconnect;
+          if (!context.mounted) return;
           _showMessage(
             context,
             'فشل إرسال الصفحة $pageNumber للطابعة. تأكد من وجود ورق وإغلاق الغطاء جيدًا.',
@@ -976,10 +963,13 @@ Future<void> printBluetoothPdfReceipt({
     }
 
     await PrintBluetoothThermal.disconnect;
+    if (!context.mounted) return;
     _showMessage(context, 'تمت الطباعة بنجاح');
   } catch (e) {
     await PrintBluetoothThermal.disconnect;
-    _showMessage(context, 'حدث خطأ أثناء طباعة PDF: $e');
+    if (context.mounted) {
+      _showMessage(context, 'حدث خطأ أثناء طباعة PDF: $e');
+    }
   } finally {
     await document?.close();
   }

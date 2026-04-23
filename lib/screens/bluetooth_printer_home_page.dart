@@ -600,6 +600,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
           ),
         ),
       ),
+      ),
     );
   }
 
@@ -939,4 +940,5 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 }
+
 
