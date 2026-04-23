@@ -620,6 +620,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
             field: DropdownButtonFormField<String>(
               initialValue: paperWidth,
               isDense: true,
+              isExpanded: true,
               decoration: _dropdownFieldDecoration(),
               items: _allowedPaperWidths
                   .map((e) => DropdownMenuItem(value: e, child: Text('$e mm')))
@@ -633,6 +634,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
             field: DropdownButtonFormField<String>(
               initialValue: commandType,
               isDense: true,
+              isExpanded: true,
               decoration: _dropdownFieldDecoration(),
               items: _allowedCommandTypes
                   .map(
@@ -651,6 +653,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
             field: DropdownButtonFormField<String>(
               initialValue: printColor,
               isDense: true,
+              isExpanded: true,
               decoration: _dropdownFieldDecoration(),
               items: _allowedPrintColors
                   .map(
@@ -669,14 +672,15 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
             field: DropdownButtonFormField<String>(
               initialValue: fitMode,
               isDense: true,
+              isExpanded: true,
               decoration: _dropdownFieldDecoration(),
               items: _allowedFitModes
                   .map(
                     (value) => DropdownMenuItem(
                       value: value,
-                      child: Text(
-                        value == 'fit_width' ? 'ملاءمة لعرض الورق' : 'الحجم الأصلي',
-                      ),
+                       child: Text(
+                        value == 'fit_width' ? 'ملاءمة العرض' : 'الحجم الأصلي',
+                       ),
                     ),
                   )
                   .toList(),
@@ -689,6 +693,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
             field: DropdownButtonFormField<String>(
               initialValue: contentAlignment,
               isDense: true,
+              isExpanded: true,
               decoration: _dropdownFieldDecoration(),
               items: _allowedAlignments
                   .map(
@@ -714,6 +719,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
             field: DropdownButtonFormField<String>(
               initialValue: beepType,
               isDense: true,
+              isExpanded: true,
               decoration: _dropdownFieldDecoration(),
               items: _allowedBeepTypes
                   .map((e) => DropdownMenuItem(value: e, child: Text(e)))

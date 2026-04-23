@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -69,7 +69,7 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
       }
       setState(() => _searchQuery = value);
     });
-    _loadDevices();
+    _loadDevices(forceSearch: true);
   }
 
   @override
@@ -164,7 +164,38 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
     return collected;
   }
 
-  Future<void> _loadDevices() async {
+  Future<List<BluetoothInfo>> _discoverNearbyForced() async {
+    final byMac = <String, BluetoothInfo>{};
+    final timeouts = <Duration>[
+      const Duration(seconds: 10),
+      const Duration(seconds: 14),
+      const Duration(seconds: 18),
+    ];
+
+    for (final timeout in timeouts) {
+      final discovered = await AndroidBluetoothDiscoveryService.discover(
+        timeout: timeout,
+      );
+      for (final device in discovered) {
+        final mac = _normalizeMac(device.macAdress);
+        if (mac.isEmpty) {
+          continue;
+        }
+        final existing = byMac[mac];
+        if (existing == null || existing.name.trim().isEmpty) {
+          byMac[mac] = BluetoothInfo(name: device.name, macAdress: mac);
+        }
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+    }
+
+    return byMac.values.toList();
+  }
+
+  Future<void> _loadDevices({bool forceSearch = false}) async {
+    if (_isLoading) {
+      return;
+    }
     if (!_isSupported) {
       if (mounted) {
         _showMessage('هذه الصفحة تعمل على Android و iOS فقط');
@@ -197,7 +228,9 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
 
       if (defaultTargetPlatform == TargetPlatform.android) {
         try {
-          final nearbyDevices = await _discoverNearbyWithRetry();
+          final nearbyDevices = forceSearch
+              ? await _discoverNearbyForced()
+              : await _discoverNearbyWithRetry();
           finalDevices = _mergeDevices(pairedDevices, nearbyDevices);
         } catch (_) {
           finalDevices = _mergeDevices(pairedDevices, const <BluetoothInfo>[]);
@@ -232,7 +265,7 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
       ),
       body: _buildBody(),
       floatingActionButton: FloatingActionButton(
-        onPressed: _loadDevices,
+        onPressed: () => _loadDevices(forceSearch: true),
         child: const Icon(Icons.refresh),
       ),
     );
@@ -321,9 +354,9 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
               separatorBuilder: (_, _) => const Divider(height: 1),
               itemBuilder: (_, index) {
                 final device = visibleDevices[index];
-        final deviceName = _deviceDisplayName(device);
-        final isPrinter = _isPrinterDeviceName(deviceName);
-        final isNPrinterModel = _isNPrinterModelName(deviceName);
+                final deviceName = _deviceDisplayName(device);
+                final isPrinter = _isPrinterDeviceName(deviceName);
+                final isNPrinterModel = _isNPrinterModelName(deviceName);
 
                 return ListTile(
                   leading: Icon(
@@ -375,3 +408,4 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 }
+
