@@ -1,0 +1,68 @@
+name: nprinter_bluetooth_only
+description: "nPrinter Bluetooth-only app."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.3
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  esc_pos_utils_plus: ^2.0.4
+  image: ^4.0.17
+  print_bluetooth_thermal: ^1.1.9
+  permission_handler: ^12.0.0+1
+  flutter_blue_plus: ^1.35.5
+  mobile_scanner: ^7.1.2
+  file_picker: ^8.0.7
+  pdfx: ^2.6.0
+  shared_preferences: ^2.5.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+
+dependency_overrides:
+  permission_handler_windows:
+    path: third_party/permission_handler_windows
+
+flutter_icons:
+  android: "ic_launcher"
+  ios: true
+  remove_alpha_ios: true
+  image_path: "assets/images/nPrinter BP.png"
+  min_sdk_android: 21
+  web:
+    generate: true
+    image_path: "assets/images/nPrinter BP.png"
+    background_color: "#ffffff"
+    theme_color: "#0175C2"
+  windows:
+    generate: true
+    image_path: "assets/images/nPrinter BP.png"
+    icon_size: 48
+  macos:
+    generate: true
+    image_path: "assets/images/nPrinter BP.png"
+  adaptive_icon_background: "#ffffff"
+  adaptive_icon_foreground: "assets/images/nPrinter BP.png"
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/
+    - assets/images/
+    - assets/logo.jpg
+  fonts:
+    - family: Tajawal
+      fonts:
+        - asset: assets/fonts/Tajawal-Regular.ttf
+    - family: NotoKufiArabicBold
+      fonts:
+        - asset: assets/fonts/NotoKufiArabic-Bold.ttf
