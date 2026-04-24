@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../screens/bluetooth_devices_scan_page.dart';
 import '../services/bluetooth_printer_service.dart';
+import '../services/pdf_intent_service.dart';
 import '../widgets/barcode_scanner_dialog.dart';
 
 class BluetoothPrinterHomePage extends StatefulWidget {
@@ -30,13 +31,11 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   static const String _fitModeKey = 'printer.fitMode';
   static const String _contentAlignmentKey = 'printer.contentAlignment';
   static const String _printColorKey = 'printer.printColor';
+  static const String _printRotationKey = 'printer.printRotation';
   static const String _commandTypeKey = 'printer.commandType';
   static const String _printTextKey = 'printer.printText';
   static const List<String> _allowedPaperWidths = <String>['58', '80', '112'];
-  static const List<String> _allowedBeepTypes = <String>[
-    '0x07',
-    '0x1B, 0x42',
-  ];
+  static const List<String> _allowedBeepTypes = <String>['0x07', '0x1B, 0x42'];
   static const List<String> _allowedFitModes = <String>[
     'fit_width',
     'original',
@@ -50,6 +49,12 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     'black',
     'red',
     'black_red',
+  ];
+  static const List<String> _allowedPrintRotations = <String>[
+    '0',
+    '90',
+    '180',
+    '270',
   ];
   static const List<String> _allowedCommandTypes = <String>[
     'auto',
@@ -68,6 +73,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   String fitMode = 'fit_width';
   String contentAlignment = 'center';
   String printColor = 'black';
+  String printRotation = '0';
   String commandType = 'auto';
   bool isAdditionalSettingsExpanded = false;
   String? selectedPdfPath;
@@ -89,11 +95,14 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     super.initState();
     macController.addListener(_onTextInputsChanged);
     textController.addListener(_onTextInputsChanged);
+    PdfIntentService.setListener(_handleIncomingPdfIntent);
     unawaited(_loadSavedSettings());
+    unawaited(_loadInitialPdfIntent());
   }
 
   @override
   void dispose() {
+    PdfIntentService.setListener(null);
     macController.removeListener(_onTextInputsChanged);
     textController.removeListener(_onTextInputsChanged);
     macController.dispose();
@@ -112,6 +121,32 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   void _updateSettings(VoidCallback updater) {
     setState(updater);
     unawaited(_saveSettingsToLocal());
+  }
+
+  Future<void> _loadInitialPdfIntent() async {
+    final pdf = await PdfIntentService.consumeInitialPdf();
+    if (!mounted || pdf == null) {
+      return;
+    }
+
+    _selectPdfFromIntent(pdf);
+  }
+
+  void _handleIncomingPdfIntent(IncomingPdfIntent pdf) {
+    if (!mounted) {
+      return;
+    }
+
+    _selectPdfFromIntent(pdf);
+    _showMessage(context, 'تم تحميل ملف PDF: ${pdf.name}');
+  }
+
+  void _selectPdfFromIntent(IncomingPdfIntent pdf) {
+    textFocusNode.unfocus();
+    setState(() {
+      selectedPdfPath = pdf.path;
+      selectedPdfName = pdf.name;
+    });
   }
 
   String _validatedPaperWidth(String value) {
@@ -135,6 +170,11 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
 
   String _validatedPrintColor(String value) {
     return _allowedPrintColors.contains(value) ? value : 'black';
+  }
+
+  String _validatedPrintRotation(String value) {
+    final normalized = value.trim();
+    return _allowedPrintRotations.contains(normalized) ? normalized : '0';
   }
 
   String _validatedCommandType(String value) {
@@ -164,6 +204,10 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
       default:
         return 'Auto';
     }
+  }
+
+  String _printRotationLabel(String value) {
+    return '$value درجة';
   }
 
   Future<void> _loadSavedSettings() async {
@@ -200,10 +244,14 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     final loadedPrintColor = _validatedPrintColor(
       prefs.getString(_printColorKey) ?? printColor,
     );
+    final loadedPrintRotation = _validatedPrintRotation(
+      prefs.getString(_printRotationKey) ?? printRotation,
+    );
     final loadedCommandType = _validatedCommandType(
       prefs.getString(_commandTypeKey) ?? commandType,
     );
-    final loadedPrintText = prefs.getString(_printTextKey) ?? textController.text;
+    final loadedPrintText =
+        prefs.getString(_printTextKey) ?? textController.text;
 
     if (!mounted) {
       return;
@@ -223,6 +271,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
       fitMode = loadedFitMode;
       contentAlignment = loadedContentAlignment;
       printColor = loadedPrintColor;
+      printRotation = loadedPrintRotation;
       commandType = loadedCommandType;
     });
     _isRestoringPreferences = false;
@@ -248,6 +297,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
       prefs.setString(_fitModeKey, fitMode),
       prefs.setString(_contentAlignmentKey, contentAlignment),
       prefs.setString(_printColorKey, printColor),
+      prefs.setString(_printRotationKey, printRotation),
       prefs.setString(_commandTypeKey, commandType),
       prefs.setString(_printTextKey, textController.text),
     ]);
@@ -284,7 +334,9 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
       return _compactMacToAddress(compactMatch.group(0)!.toUpperCase());
     }
 
-    final cleaned = trimmed.replaceAll(RegExp(r'[^0-9A-Fa-f]'), '').toUpperCase();
+    final cleaned = trimmed
+        .replaceAll(RegExp(r'[^0-9A-Fa-f]'), '')
+        .toUpperCase();
     if (cleaned.length == 12) {
       return _compactMacToAddress(cleaned);
     }
@@ -331,271 +383,294 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
             textDirection: TextDirection.rtl,
             child: Column(
               children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(14),
-                child: BackdropFilter(
-                  filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-                  child: Container(
-                    padding: const EdgeInsets.all(12),
-                    width: width * 0.95,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(14),
-                      gradient: LinearGradient(
-                        begin: Alignment.topRight,
-                        end: Alignment.bottomLeft,
-                        colors: [
-                          const Color(0xffEAF5FF).withValues(alpha: 0.72),
-                          const Color(0xffD7EAFF).withValues(alpha: 0.52),
-                        ],
-                      ),
-                      border: Border.all(
-                        color: const Color(0xff9EC7EE).withValues(alpha: 0.7),
-                      ),
-                    ),
-                    child: Column(
-                  children: [
-                    const SizedBox(height: 2),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        OutlinedButton.icon(
-                          style: const ButtonStyle(
-                            padding: WidgetStatePropertyAll(
-                              EdgeInsets.symmetric(horizontal: 8),
-                            ),
-                          ),
-                          icon: const Icon(Icons.bluetooth_searching_rounded),
-                          label: Text(
-                            supportsScan ? 'بحث' : 'غير مدعوم',
-                          ),
-                          onPressed: supportsScan
-                              ? () async {
-                                  final selectedMac =
-                                      await Navigator.push<String>(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (_) =>
-                                              const BluetoothDevicesScanPage(),
-                                        ),
-                                      );
-
-                                  if (selectedMac != null) {
-                                    _updateSettings(
-                                      () => macController.text =
-                                          _normalizeMacAddress(selectedMac),
-                                    );
-                                  }
-                                }
-                              : null,
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: BackdropFilter(
+                    filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      width: width * 0.95,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(14),
+                        gradient: LinearGradient(
+                          begin: Alignment.topRight,
+                          end: Alignment.bottomLeft,
+                          colors: [
+                            const Color(0xffEAF5FF).withValues(alpha: 0.72),
+                            const Color(0xffD7EAFF).withValues(alpha: 0.52),
+                          ],
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: TextFormField(
-                            controller: macController,
-                            textDirection: TextDirection.ltr,
-                            decoration: const InputDecoration(
-                              labelText: 'MAC Address',
-                              hintText: '11:22:33:44:55:66',
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.all(
-                                  Radius.circular(10),
+                        border: Border.all(
+                          color: const Color(0xff9EC7EE).withValues(alpha: 0.7),
+                        ),
+                      ),
+                      child: Column(
+                        children: [
+                          const SizedBox(height: 2),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              OutlinedButton.icon(
+                                style: const ButtonStyle(
+                                  padding: WidgetStatePropertyAll(
+                                    EdgeInsets.symmetric(horizontal: 8),
+                                  ),
+                                ),
+                                icon: const Icon(
+                                  Icons.bluetooth_searching_rounded,
+                                ),
+                                label: Text(supportsScan ? 'بحث' : 'غير مدعوم'),
+                                onPressed: supportsScan
+                                    ? () async {
+                                        final selectedMac =
+                                            await Navigator.push<String>(
+                                              context,
+                                              MaterialPageRoute(
+                                                builder: (_) =>
+                                                    const BluetoothDevicesScanPage(),
+                                              ),
+                                            );
+
+                                        if (selectedMac != null) {
+                                          _updateSettings(
+                                            () => macController.text =
+                                                _normalizeMacAddress(
+                                                  selectedMac,
+                                                ),
+                                          );
+                                        }
+                                      }
+                                    : null,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: TextFormField(
+                                  controller: macController,
+                                  textDirection: TextDirection.ltr,
+                                  decoration: const InputDecoration(
+                                    labelText: 'MAC Address',
+                                    hintText: '11:22:33:44:55:66',
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.all(
+                                        Radius.circular(10),
+                                      ),
+                                    ),
+                                  ),
                                 ),
                               ),
-                            ),
+                              const SizedBox(width: 6),
+                              IconButton(
+                                tooltip: supportsScan
+                                    ? 'مسح باركود'
+                                    : 'غير مدعوم على Windows',
+                                icon: const Icon(Icons.qr_code_scanner_rounded),
+                                onPressed: supportsScan
+                                    ? () async {
+                                        final scannedCode =
+                                            await scanBarcodeInDialog(context);
+                                        if (scannedCode == null) {
+                                          return;
+                                        }
+                                        _updateSettings(
+                                          () => macController.text =
+                                              _normalizeMacAddress(scannedCode),
+                                        );
+                                      }
+                                    : null,
+                              ),
+                            ],
                           ),
-                        ),
-                        const SizedBox(width: 6),
-                        IconButton(
-                          tooltip:
-                              supportsScan ? 'مسح باركود' : 'غير مدعوم على Windows',
-                          icon: const Icon(Icons.qr_code_scanner_rounded),
-                          onPressed: supportsScan
-                              ? () async {
-                                  final scannedCode = await scanBarcodeInDialog(
-                                    context,
-                                  );
-                                  if (scannedCode == null) {
-                                    return;
-                                  }
-                                  _updateSettings(
-                                    () => macController.text =
-                                        _normalizeMacAddress(scannedCode),
-                                  );
-                                }
-                              : null,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    if (!supportsScan) const SizedBox(height: 6),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.black26),
-                        color: const Color(0xffE6F3FF).withValues(alpha: 0.58),
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                          const SizedBox(height: 14),
+                          if (!supportsScan) const SizedBox(height: 6),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.black26),
+                              color: const Color(
+                                0xffE6F3FF,
+                              ).withValues(alpha: 0.58),
+                            ),
+                            child: Row(
                               children: [
-                                const Text(
-                                  'ملف PDF',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      const Text(
+                                        'ملف PDF',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        selectedPdfName ?? 'لم يتم اختيار ملف',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: selectedPdfName == null
+                                              ? Colors.black54
+                                              : Colors.black87,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  selectedPdfName ?? 'لم يتم اختيار ملف',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: selectedPdfName == null
-                                        ? Colors.black54
-                                        : Colors.black87,
+                                const SizedBox(width: 10),
+                                FilledButton.tonalIcon(
+                                  onPressed: _pickPdfFile,
+                                  icon: const Icon(
+                                    Icons.picture_as_pdf_outlined,
+                                  ),
+                                  label: Text(
+                                    selectedPdfPath == null
+                                        ? 'اختيار'
+                                        : 'تغيير',
                                   ),
                                 ),
+                                if (selectedPdfPath != null) ...[
+                                  const SizedBox(width: 6),
+                                  IconButton(
+                                    tooltip: 'إزالة الملف',
+                                    onPressed: () {
+                                      setState(() {
+                                        selectedPdfPath = null;
+                                        selectedPdfName = null;
+                                      });
+                                    },
+                                    icon: const Icon(Icons.close_rounded),
+                                  ),
+                                ],
                               ],
                             ),
                           ),
-                          const SizedBox(width: 10),
-                          FilledButton.tonalIcon(
-                            onPressed: _pickPdfFile,
-                            icon: const Icon(Icons.picture_as_pdf_outlined),
-                            label: Text(
-                              selectedPdfPath == null ? 'اختيار' : 'تغيير',
-                            ),
-                          ),
-                          if (selectedPdfPath != null) ...[
-                            const SizedBox(width: 6),
-                            IconButton(
-                              tooltip: 'إزالة الملف',
-                              onPressed: () {
-                                setState(() {
-                                  selectedPdfPath = null;
-                                  selectedPdfName = null;
-                                });
-                              },
-                              icon: const Icon(Icons.close_rounded),
+                          if (selectedPdfPath == null) ...[
+                            const SizedBox(height: 10),
+                            TextFormField(
+                              controller: textController,
+                              focusNode: textFocusNode,
+                              decoration: const InputDecoration(
+                                labelText: 'نص الطباعة',
+                                hintText: 'اكتب النص هنا...',
+                                alignLabelWithHint: true,
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 16,
+                                ),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.all(
+                                    Radius.circular(10),
+                                  ),
+                                ),
+                              ),
+                              keyboardType: TextInputType.multiline,
+                              textInputAction: TextInputAction.newline,
+                              minLines: 8,
+                              maxLines: null,
+                              onTapOutside: (_) => textFocusNode.unfocus(),
                             ),
                           ],
+                          const SizedBox(height: 12),
+                          _settingsSection(),
+                          const SizedBox(height: 16),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 56,
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 16,
+                                ),
+                              ),
+                              icon: const Icon(Icons.print, size: 22),
+                              label: const Text('طباعة'),
+                              onPressed: () async {
+                                final normalizedMac = _normalizeMacAddress(
+                                  macController.text,
+                                );
+                                if (normalizedMac.isEmpty) {
+                                  _showMessage(
+                                    context,
+                                    'يرجى إدخال عنوان MAC للطابعة',
+                                  );
+                                  return;
+                                }
+                                if (macController.text.trim() !=
+                                    normalizedMac) {
+                                  _updateSettings(
+                                    () => macController.text = normalizedMac,
+                                  );
+                                }
+
+                                if (selectedPdfPath != null) {
+                                  await printBluetoothPdfReceipt(
+                                    context: context,
+                                    pdfPath: selectedPdfPath!,
+                                    paperWidth: double.parse(paperWidth),
+                                    mac: normalizedMac,
+                                    beepBefore: beepBefore,
+                                    beepAfter: beepAfter,
+                                    beepType: beepType,
+                                    autoCut: cutPaper,
+                                    feedLines: feedLines,
+                                    fitMode: fitMode,
+                                    contentAlignment: contentAlignment,
+                                    commandType: commandType,
+                                    printColor: printColor,
+                                    printRotationDegrees: int.parse(
+                                      printRotation,
+                                    ),
+                                  );
+                                  return;
+                                }
+
+                                if (textController.text.trim().isEmpty) {
+                                  _showMessage(
+                                    context,
+                                    'يرجى إدخال نص الطباعة أو اختيار ملف PDF',
+                                  );
+                                  return;
+                                }
+
+                                await printBluetoothReceipt(
+                                  context: context,
+                                  text: textController.text,
+                                  paperWidth: double.parse(paperWidth),
+                                  mac: normalizedMac,
+                                  beepBefore: beepBefore,
+                                  beepAfter: beepAfter,
+                                  beepType: beepType,
+                                  autoCut: cutPaper,
+                                  feedLines: feedLines,
+                                  textBorder: textBorder,
+                                  fitMode: fitMode,
+                                  contentAlignment: contentAlignment,
+                                  commandType: commandType,
+                                  printColor: printColor,
+                                  printRotationDegrees: int.parse(
+                                    printRotation,
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
                         ],
                       ),
                     ),
-                    if (selectedPdfPath == null) ...[
-                      const SizedBox(height: 10),
-                      TextFormField(
-                        controller: textController,
-                        focusNode: textFocusNode,
-                        decoration: const InputDecoration(
-                          labelText: 'نص الطباعة',
-                          hintText: 'اكتب النص هنا...',
-                          alignLabelWithHint: true,
-                          contentPadding: EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 16,
-                          ),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.all(Radius.circular(10)),
-                          ),
-                        ),
-                        keyboardType: TextInputType.multiline,
-                        textInputAction: TextInputAction.newline,
-                        minLines: 8,
-                        maxLines: null,
-                        onTapOutside: (_) => textFocusNode.unfocus(),
-                      ),
-                    ],
-                    const SizedBox(height: 12),
-                    _settingsSection(),
-                    const SizedBox(height: 16),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 56,
-                      child: ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                        ),
-                        icon: const Icon(Icons.print, size: 22),
-                        label: const Text('طباعة'),
-                        onPressed: () async {
-                          final normalizedMac = _normalizeMacAddress(
-                            macController.text,
-                          );
-                        if (normalizedMac.isEmpty) {
-                          _showMessage(context, 'يرجى إدخال عنوان MAC للطابعة');
-                          return;
-                        }
-                        if (macController.text.trim() != normalizedMac) {
-                          _updateSettings(
-                            () => macController.text = normalizedMac,
-                          );
-                        }
-
-                        if (selectedPdfPath != null) {
-                          await printBluetoothPdfReceipt(
-                            context: context,
-                            pdfPath: selectedPdfPath!,
-                            paperWidth: double.parse(paperWidth),
-                            mac: normalizedMac,
-                            beepBefore: beepBefore,
-                            beepAfter: beepAfter,
-                            beepType: beepType,
-                            autoCut: cutPaper,
-                            feedLines: feedLines,
-                            fitMode: fitMode,
-                            contentAlignment: contentAlignment,
-                            commandType: commandType,
-                            printColor: printColor,
-                          );
-                          return;
-                        }
-
-                        if (textController.text.trim().isEmpty) {
-                          _showMessage(
-                            context,
-                            'يرجى إدخال نص الطباعة أو اختيار ملف PDF',
-                          );
-                          return;
-                        }
-
-                          await printBluetoothReceipt(
-                            context: context,
-                            text: textController.text,
-                            paperWidth: double.parse(paperWidth),
-                            mac: normalizedMac,
-                            beepBefore: beepBefore,
-                            beepAfter: beepAfter,
-                            beepType: beepType,
-                            autoCut: cutPaper,
-                            feedLines: feedLines,
-                            textBorder: textBorder,
-                            fitMode: fitMode,
-                            contentAlignment: contentAlignment,
-                            commandType: commandType,
-                            printColor: printColor,
-                          );
-                        },
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
-              ),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -674,9 +749,9 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                   .map(
                     (value) => DropdownMenuItem(
                       value: value,
-                       child: Text(
+                      child: Text(
                         value == 'fit_width' ? 'ملاءمة العرض' : 'الحجم الأصلي',
-                       ),
+                      ),
                     ),
                   )
                   .toList(),
@@ -699,14 +774,34 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                         value == 'center'
                             ? 'توسيط'
                             : value == 'right'
-                                ? 'يمين'
-                                : 'يسار',
+                            ? 'يمين'
+                            : 'يسار',
                       ),
                     ),
                   )
                   .toList(),
               onChanged: (value) =>
                   _updateSettings(() => contentAlignment = value!),
+            ),
+          ),
+          const SizedBox(height: 8),
+          _settingFieldRow(
+            label: 'درجة الدوران',
+            field: DropdownButtonFormField<String>(
+              initialValue: printRotation,
+              isDense: true,
+              isExpanded: true,
+              decoration: _dropdownFieldDecoration(),
+              items: _allowedPrintRotations
+                  .map(
+                    (value) => DropdownMenuItem(
+                      value: value,
+                      child: Text(_printRotationLabel(value)),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) =>
+                  _updateSettings(() => printRotation = value!),
             ),
           ),
           const SizedBox(height: 8),
@@ -731,9 +826,9 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
               color: Colors.white.withValues(alpha: 0.38),
             ),
             child: Theme(
-              data: Theme.of(context).copyWith(
-                dividerColor: Colors.transparent,
-              ),
+              data: Theme.of(
+                context,
+              ).copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
                 tilePadding: const EdgeInsets.symmetric(horizontal: 12),
                 childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
@@ -942,5 +1037,3 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 }
-
-

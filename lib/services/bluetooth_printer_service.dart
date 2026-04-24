@@ -79,6 +79,25 @@ String _normalizePrintColor(String printColor) {
   return 'black';
 }
 
+int _normalizePrintRotation(int rotationDegrees) {
+  final normalized = rotationDegrees % 360;
+  final positiveRotation = normalized < 0 ? normalized + 360 : normalized;
+  if (positiveRotation == 90 ||
+      positiveRotation == 180 ||
+      positiveRotation == 270) {
+    return positiveRotation;
+  }
+  return 0;
+}
+
+img.Image _applyPrintRotation(img.Image source, int rotationDegrees) {
+  final normalizedRotation = _normalizePrintRotation(rotationDegrees);
+  if (normalizedRotation == 0) {
+    return source;
+  }
+  return img.copyRotate(source, angle: normalizedRotation);
+}
+
 List<int> _buildPrintColorBytes(String printColor) {
   // ESC r n : Select color (common two-color ESC/POS printers)
   // n=0 black, n=1 red
@@ -526,6 +545,7 @@ Future<img.Image> _prepareImageForCommand(
   double paperWidthMm, {
   bool forceFitToPaperWidth = false,
   String printerProfile = 'auto',
+  int printRotationDegrees = 0,
 }) async {
   final byteData = await flutterImage.toByteData(format: ui.ImageByteFormat.png);
   if (byteData == null) {
@@ -538,20 +558,21 @@ Future<img.Image> _prepareImageForCommand(
     throw Exception('تعذر فك ترميز الصورة');
   }
 
+  final rotatedImage = _applyPrintRotation(decodedImage, printRotationDegrees);
   final rasterTargetWidth = _resolveRasterTargetWidth(
     paperWidthMm,
     printerProfile: printerProfile,
   );
   final mustResizeToPaperWidth =
-      forceFitToPaperWidth || decodedImage.width > rasterTargetWidth;
+      forceFitToPaperWidth || rotatedImage.width > rasterTargetWidth;
 
   return mustResizeToPaperWidth
       ? img.copyResize(
-          decodedImage,
+          rotatedImage,
           width: rasterTargetWidth,
           interpolation: img.Interpolation.average,
         )
-      : decodedImage;
+      : rotatedImage;
 }
 
 Future<List<int>> _convertPreparedImageToEscPosBytes(
@@ -597,6 +618,7 @@ Future<bool> _printImageByCommandType({
   required String contentAlignment,
   required String printerProfile,
   required String printColor,
+  required int printRotationDegrees,
   required Generator generator,
 }) async {
   final preparedImage = await _prepareImageForCommand(
@@ -604,6 +626,7 @@ Future<bool> _printImageByCommandType({
     paperWidthMm,
     forceFitToPaperWidth: _isFitToWidthMode(fitMode),
     printerProfile: printerProfile,
+    printRotationDegrees: printRotationDegrees,
   );
   if (_isEscCommandType(commandType)) {
     final align = _resolvePrintAlignment(contentAlignment);
@@ -722,6 +745,7 @@ Future<void> printBluetoothReceipt({
   String printerProfile = 'auto',
   String commandType = 'auto',
   String printColor = 'black',
+  int printRotationDegrees = 0,
 }) async {
   try {
     final normalizedCommandType = _normalizeCommandType(commandType);
@@ -775,6 +799,7 @@ Future<void> printBluetoothReceipt({
         contentAlignment: contentAlignment,
         printerProfile: printerProfile,
         printColor: normalizedPrintColor,
+        printRotationDegrees: printRotationDegrees,
         generator: generator,
       );
       if (!sentChunk) {
@@ -842,6 +867,7 @@ Future<void> printBluetoothPdfReceipt({
   String printerProfile = 'auto',
   String commandType = 'auto',
   String printColor = 'black',
+  int printRotationDegrees = 0,
 }) async {
   PdfDocument? document;
 
@@ -918,6 +944,7 @@ Future<void> printBluetoothPdfReceipt({
           contentAlignment: contentAlignment,
           printerProfile: printerProfile,
           printColor: normalizedPrintColor,
+          printRotationDegrees: printRotationDegrees,
           generator: generator,
         );
         if (!sentPage) {
