@@ -16,6 +16,12 @@ class BluetoothDevicesScanPage extends StatefulWidget {
 }
 
 class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
+  static const Duration _quickScanTimeout = Duration(seconds: 6);
+  static const List<Duration> _forceScanTimeouts = <Duration>[
+    Duration(seconds: 6),
+    Duration(seconds: 8),
+  ];
+
   final List<BluetoothInfo> _devices = <BluetoothInfo>[];
   final TextEditingController _searchController = TextEditingController();
   bool _isLoading = false;
@@ -33,12 +39,17 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
 
   bool _isPrinterDeviceName(String name) {
     final normalized = name.trim().toLowerCase();
-    return normalized.contains('printer');
+    return normalized.contains('printer') || _isNPrinterModelName(name);
   }
 
   bool _isNPrinterModelName(String name) {
-    final normalized = name.trim().toUpperCase();
-    return normalized.contains('B300') || normalized.contains('B380');
+    final normalized = name.trim().toUpperCase().replaceAll(
+      RegExp(r'[\s_-]+'),
+      '',
+    );
+    return normalized.contains('B300') ||
+        normalized.contains('B380') ||
+        normalized.contains('PRINTER001');
   }
 
   String _normalizeMac(String mac) {
@@ -69,7 +80,7 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
       }
       setState(() => _searchQuery = value);
     });
-    _loadDevices(forceSearch: true);
+    _loadDevices();
   }
 
   @override
@@ -151,28 +162,13 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
   }
 
   Future<List<BluetoothInfo>> _discoverNearbyWithRetry() async {
-    final collected = <BluetoothInfo>[];
-
-    for (var attempt = 0; attempt < 2; attempt++) {
-      final discovered = await AndroidBluetoothDiscoveryService.discover(
-        timeout: Duration(seconds: attempt == 0 ? 10 : 14),
-      );
-      collected.addAll(discovered);
-      await Future<void>.delayed(const Duration(milliseconds: 450));
-    }
-
-    return collected;
+    return AndroidBluetoothDiscoveryService.discover(timeout: _quickScanTimeout);
   }
 
   Future<List<BluetoothInfo>> _discoverNearbyForced() async {
     final byMac = <String, BluetoothInfo>{};
-    final timeouts = <Duration>[
-      const Duration(seconds: 10),
-      const Duration(seconds: 14),
-      const Duration(seconds: 18),
-    ];
-
-    for (final timeout in timeouts) {
+    for (var i = 0; i < _forceScanTimeouts.length; i++) {
+      final timeout = _forceScanTimeouts[i];
       final discovered = await AndroidBluetoothDiscoveryService.discover(
         timeout: timeout,
       );
@@ -186,7 +182,13 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
           byMac[mac] = BluetoothInfo(name: device.name, macAdress: mac);
         }
       }
-      await Future<void>.delayed(const Duration(milliseconds: 700));
+
+      if (byMac.isNotEmpty) {
+        break;
+      }
+      if (i < _forceScanTimeouts.length - 1) {
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
     }
 
     return byMac.values.toList();
@@ -366,12 +368,6 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
                   title: Row(
                     children: [
                       Expanded(child: Text(deviceName)),
-                      if (isPrinter)
-                        const Icon(
-                          Icons.print_rounded,
-                          size: 18,
-                          color: Colors.blueGrey,
-                        ),
                       if (isNPrinterModel) ...[
                         const SizedBox(width: 8),
                         Image.asset(

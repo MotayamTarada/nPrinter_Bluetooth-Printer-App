@@ -356,61 +356,37 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                   children: [
                     const SizedBox(height: 2),
                     Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        Column(
-                          children: [
-                            OutlinedButton.icon(
-                              style: const ButtonStyle(
-                                padding: WidgetStatePropertyAll(
-                                  EdgeInsets.symmetric(horizontal: 8),
-                                ),
-                              ),
-                              icon: const Icon(Icons.bluetooth_searching_rounded),
-                              label: Text(
-                                supportsScan ? 'بحث' : 'غير مدعوم',
-                              ),
-                              onPressed: supportsScan
-                                  ? () async {
-                                      final selectedMac =
-                                          await Navigator.push<String>(
-                                            context,
-                                            MaterialPageRoute(
-                                              builder: (_) =>
-                                                  const BluetoothDevicesScanPage(),
-                                            ),
-                                          );
-
-                                      if (selectedMac != null) {
-                                        _updateSettings(
-                                          () => macController.text =
-                                              _normalizeMacAddress(selectedMac),
-                                        );
-                                      }
-                                    }
-                                  : null,
+                        OutlinedButton.icon(
+                          style: const ButtonStyle(
+                            padding: WidgetStatePropertyAll(
+                              EdgeInsets.symmetric(horizontal: 8),
                             ),
-                            IconButton(
-                              tooltip: supportsScan
-                                  ? 'مسح باركود'
-                                  : 'غير مدعوم على Windows',
-                              icon: const Icon(Icons.qr_code_scanner_rounded),
-                              onPressed: supportsScan
-                                  ? () async {
-                                      final scannedCode = await scanBarcodeInDialog(
+                          ),
+                          icon: const Icon(Icons.bluetooth_searching_rounded),
+                          label: Text(
+                            supportsScan ? 'بحث' : 'غير مدعوم',
+                          ),
+                          onPressed: supportsScan
+                              ? () async {
+                                  final selectedMac =
+                                      await Navigator.push<String>(
                                         context,
+                                        MaterialPageRoute(
+                                          builder: (_) =>
+                                              const BluetoothDevicesScanPage(),
+                                        ),
                                       );
-                                      if (scannedCode == null) {
-                                        return;
-                                      }
-                                      _updateSettings(
-                                        () => macController.text =
-                                            _normalizeMacAddress(scannedCode),
-                                      );
-                                    }
-                                  : null,
-                            ),
-                          ],
+
+                                  if (selectedMac != null) {
+                                    _updateSettings(
+                                      () => macController.text =
+                                          _normalizeMacAddress(selectedMac),
+                                    );
+                                  }
+                                }
+                              : null,
                         ),
                         const SizedBox(width: 8),
                         Expanded(
@@ -427,6 +403,26 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                               ),
                             ),
                           ),
+                        ),
+                        const SizedBox(width: 6),
+                        IconButton(
+                          tooltip:
+                              supportsScan ? 'مسح باركود' : 'غير مدعوم على Windows',
+                          icon: const Icon(Icons.qr_code_scanner_rounded),
+                          onPressed: supportsScan
+                              ? () async {
+                                  final scannedCode = await scanBarcodeInDialog(
+                                    context,
+                                  );
+                                  if (scannedCode == null) {
+                                    return;
+                                  }
+                                  _updateSettings(
+                                    () => macController.text =
+                                        _normalizeMacAddress(scannedCode),
+                                  );
+                                }
+                              : null,
                         ),
                       ],
                     ),

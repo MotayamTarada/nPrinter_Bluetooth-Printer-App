@@ -765,6 +765,7 @@ Future<void> printBluetoothReceipt({
         paperWidth,
         addBorder: textBorder,
         printerProfile: printerProfile,
+        printColor: normalizedPrintColor,
       );
       final sentChunk = await _printImageByCommandType(
         commandType: effectiveCommandType,

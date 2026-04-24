@@ -33,6 +33,7 @@ Future<ui.Image> generateSimpleTextImage(
   double paperWidth, {
   bool addBorder = true,
   String printerProfile = 'auto',
+  String printColor = 'black',
 }) async {
   final width = _paperPixelWidth(
     paperWidth,
@@ -45,10 +46,16 @@ Future<ui.Image> generateSimpleTextImage(
       FontLoader('NotoKufiArabicBold')..addFont(Future.value(fontData));
   await fontLoader.load();
 
-  const textStyle = TextStyle(
+  final normalizedPrintColor = printColor.trim().toLowerCase();
+  final textPaintColor =
+      normalizedPrintColor == 'red' || normalizedPrintColor == 'black_red'
+      ? Colors.red
+      : Colors.black;
+
+  final textStyle = TextStyle(
     fontFamily: 'NotoKufiArabicBold',
     fontSize: 26,
-    color: Colors.black,
+    color: textPaintColor,
     fontWeight: FontWeight.bold,
   );
 
