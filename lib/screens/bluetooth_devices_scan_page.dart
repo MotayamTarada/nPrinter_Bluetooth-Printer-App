@@ -162,7 +162,9 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
   }
 
   Future<List<BluetoothInfo>> _discoverNearbyWithRetry() async {
-    return AndroidBluetoothDiscoveryService.discover(timeout: _quickScanTimeout);
+    return AndroidBluetoothDiscoveryService.discover(
+      timeout: _quickScanTimeout,
+    );
   }
 
   Future<List<BluetoothInfo>> _discoverNearbyForced() async {
@@ -182,10 +184,10 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
           byMac[mac] = BluetoothInfo(name: device.name, macAdress: mac);
         }
       }
-
       if (byMac.isNotEmpty) {
         break;
       }
+
       if (i < _forceScanTimeouts.length - 1) {
         await Future<void>.delayed(const Duration(milliseconds: 250));
       }
@@ -404,4 +406,3 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 }
-
