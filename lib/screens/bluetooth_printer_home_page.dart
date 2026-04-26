@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
@@ -34,8 +34,19 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   static const String _printRotationKey = 'printer.printRotation';
   static const String _commandTypeKey = 'printer.commandType';
   static const String _printTextKey = 'printer.printText';
+  static const String _textFontSizeKey = 'printer.textFontSize';
+  static const String _textFontFamilyKey = 'printer.textFontFamily';
   static const List<String> _allowedPaperWidths = <String>['58', '80', '112'];
   static const List<String> _allowedBeepTypes = <String>['0x07', '0x1B, 0x42'];
+  static const List<String> _allowedTextFontFamilies = <String>[
+    'NotoKufiArabicBold',
+    'Tajawal',
+    'Cairo',
+    'Almarai',
+    'Changa',
+    'Amiri',
+    'ReemKufi',
+  ];
   static const List<String> _allowedFitModes = <String>[
     'fit_width',
     'original',
@@ -75,6 +86,8 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   String printColor = 'black';
   String printRotation = '0';
   String commandType = 'auto';
+  int textFontSize = 26;
+  String textFontFamily = 'NotoKufiArabicBold';
   bool isAdditionalSettingsExpanded = false;
   String? selectedPdfPath;
   String? selectedPdfName;
@@ -168,6 +181,39 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     return _allowedAlignments.contains(normalized) ? normalized : 'center';
   }
 
+  bool _isSidewaysPrintRotationValue(String value) {
+    return value == '90' || value == '270';
+  }
+
+  bool get _isSidewaysPrintRotation {
+    return _isSidewaysPrintRotationValue(printRotation);
+  }
+
+  String _alignmentLabel(String value) {
+    if (_isSidewaysPrintRotation) {
+      return value == 'center'
+          ? 'توسيط'
+          : value == 'right'
+          ? 'أعلى'
+          : 'أسفل';
+    }
+
+    return value == 'center'
+        ? 'توسيط'
+        : value == 'right'
+        ? 'يمين'
+        : 'يسار';
+  }
+
+  double? _parsedPaperWidth() {
+    final normalized = paperWidth.trim().replaceAll(',', '.');
+    final parsed = double.tryParse(normalized);
+    if (parsed == null || parsed <= 0) {
+      return null;
+    }
+    return parsed;
+  }
+
   String _validatedPrintColor(String value) {
     return _allowedPrintColors.contains(value) ? value : 'black';
   }
@@ -180,6 +226,35 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   String _validatedCommandType(String value) {
     final normalized = value.trim().toLowerCase();
     return _allowedCommandTypes.contains(normalized) ? normalized : 'auto';
+  }
+
+  int _validatedTextFontSize(int value) {
+    return value.clamp(12, 72).toInt();
+  }
+
+  String _validatedTextFontFamily(String value) {
+    return _allowedTextFontFamilies.contains(value)
+        ? value
+        : 'NotoKufiArabicBold';
+  }
+
+  String _textFontFamilyLabel(String value) {
+    switch (value) {
+      case 'Tajawal':
+        return 'تجوال';
+      case 'Cairo':
+        return 'كايرو (Cairo)';
+      case 'Almarai':
+        return 'المراعي (Almarai)';
+      case 'Changa':
+        return 'شانجا (Changa)';
+      case 'Amiri':
+        return 'أميري (Amiri)';
+      case 'ReemKufi':
+        return 'ريم كوفي (ReemKufi)';
+      default:
+        return 'كوفي عريض';
+    }
   }
 
   String _printColorLabel(String value) {
@@ -238,17 +313,23 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     final loadedFitMode = _validatedFitMode(
       prefs.getString(_fitModeKey) ?? fitMode,
     );
-    final loadedContentAlignment = _validatedAlignment(
-      prefs.getString(_contentAlignmentKey) ?? contentAlignment,
-    );
     final loadedPrintColor = _validatedPrintColor(
       prefs.getString(_printColorKey) ?? printColor,
     );
     final loadedPrintRotation = _validatedPrintRotation(
       prefs.getString(_printRotationKey) ?? printRotation,
     );
+    final loadedContentAlignment = _validatedAlignment(
+      prefs.getString(_contentAlignmentKey) ?? contentAlignment,
+    );
     final loadedCommandType = _validatedCommandType(
       prefs.getString(_commandTypeKey) ?? commandType,
+    );
+    final loadedTextFontSize = _validatedTextFontSize(
+      prefs.getInt(_textFontSizeKey) ?? textFontSize,
+    );
+    final loadedTextFontFamily = _validatedTextFontFamily(
+      prefs.getString(_textFontFamilyKey) ?? textFontFamily,
     );
     final loadedPrintText =
         prefs.getString(_printTextKey) ?? textController.text;
@@ -273,6 +354,8 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
       printColor = loadedPrintColor;
       printRotation = loadedPrintRotation;
       commandType = loadedCommandType;
+      textFontSize = loadedTextFontSize;
+      textFontFamily = loadedTextFontFamily;
     });
     _isRestoringPreferences = false;
   }
@@ -299,6 +382,8 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
       prefs.setString(_printColorKey, printColor),
       prefs.setString(_printRotationKey, printRotation),
       prefs.setString(_commandTypeKey, commandType),
+      prefs.setInt(_textFontSizeKey, textFontSize),
+      prefs.setString(_textFontFamilyKey, textFontFamily),
       prefs.setString(_printTextKey, textController.text),
     ]);
   }
@@ -557,6 +642,10 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                             TextFormField(
                               controller: textController,
                               focusNode: textFocusNode,
+                              style: TextStyle(
+                                fontFamily: textFontFamily,
+                                fontSize: textFontSize.toDouble(),
+                              ),
                               decoration: const InputDecoration(
                                 labelText: 'نص الطباعة',
                                 hintText: 'اكتب النص هنا...',
@@ -576,6 +665,132 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                               minLines: 8,
                               maxLines: null,
                               onTapOutside: (_) => textFocusNode.unfocus(),
+                            ),
+                            const SizedBox(height: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.black12),
+                                color: const Color(0xffE8F4FF).withValues(alpha: 0.35),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'إعدادات النص',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Row(
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            const Text(
+                                              'نوع الخط',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            SizedBox(
+                                              height: 42,
+                                              child: DropdownButtonFormField<String>(
+                                                initialValue: textFontFamily,
+                                                isDense: true,
+                                                isExpanded: true,
+                                                decoration: _dropdownFieldDecoration().copyWith(
+                                                  contentPadding: const EdgeInsets.symmetric(
+                                                    horizontal: 8,
+                                                    vertical: 8,
+                                                  ),
+                                                ),
+                                                items: _allowedTextFontFamilies
+                                                    .map(
+                                                      (value) => DropdownMenuItem(
+                                                        value: value,
+                                                        child: Text(
+                                                          _textFontFamilyLabel(value),
+                                                          style: const TextStyle(fontSize: 13),
+                                                        ),
+                                                      ),
+                                                    )
+                                                    .toList(),
+                                                onChanged: (value) => _updateSettings(
+                                                  () => textFontFamily = value!,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(width: 16),
+                                      Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          const Text(
+                                            'حجم الخط',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Container(
+                                            height: 42,
+                                            decoration: BoxDecoration(
+                                              borderRadius: BorderRadius.circular(8),
+                                              border: Border.all(color: Colors.black26),
+                                              color: Colors.white.withValues(alpha: 0.72),
+                                            ),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              mainAxisAlignment: MainAxisAlignment.center,
+                                              textDirection: TextDirection.ltr,
+                                              children: [
+                                                _stepperButton(
+                                                  icon: Icons.remove_rounded,
+                                                  onPressed: () => _updateSettings(
+                                                    () => textFontSize = _validatedTextFontSize(textFontSize - 1),
+                                                  ),
+                                                ),
+                                                SizedBox(
+                                                  width: 38,
+                                                  child: Text(
+                                                    '$textFontSize',
+                                                    textAlign: TextAlign.center,
+                                                    style: const TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight: FontWeight.w600,
+                                                    ),
+                                                  ),
+                                                ),
+                                                _stepperButton(
+                                                  icon: Icons.add_rounded,
+                                                  onPressed: () => _updateSettings(
+                                                    () => textFontSize = _validatedTextFontSize(textFontSize + 1),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
                             ),
                           ],
                           const SizedBox(height: 12),
@@ -610,11 +825,20 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                                   );
                                 }
 
+                                final selectedPaperWidth = _parsedPaperWidth();
+                                if (selectedPaperWidth == null) {
+                                  _showMessage(
+                                    context,
+                                    'يرجى إدخال قيمة رقمية صحيحة للمقاس',
+                                  );
+                                  return;
+                                }
+
                                 if (selectedPdfPath != null) {
                                   await printBluetoothPdfReceipt(
                                     context: context,
                                     pdfPath: selectedPdfPath!,
-                                    paperWidth: double.parse(paperWidth),
+                                    paperWidth: selectedPaperWidth,
                                     mac: normalizedMac,
                                     beepBefore: beepBefore,
                                     beepAfter: beepAfter,
@@ -643,7 +867,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                                 await printBluetoothReceipt(
                                   context: context,
                                   text: textController.text,
-                                  paperWidth: double.parse(paperWidth),
+                                  paperWidth: selectedPaperWidth,
                                   mac: normalizedMac,
                                   beepBefore: beepBefore,
                                   beepAfter: beepAfter,
@@ -658,6 +882,8 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                                   printRotationDegrees: int.parse(
                                     printRotation,
                                   ),
+                                  textFontSize: textFontSize,
+                                  textFontFamily: textFontFamily,
                                 );
                               },
                             ),
@@ -687,17 +913,8 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
       child: Column(
         children: [
           _settingFieldRow(
-            label: 'عرض الورق',
-            field: DropdownButtonFormField<String>(
-              initialValue: paperWidth,
-              isDense: true,
-              isExpanded: true,
-              decoration: _dropdownFieldDecoration(),
-              items: _allowedPaperWidths
-                  .map((e) => DropdownMenuItem(value: e, child: Text('$e mm')))
-                  .toList(),
-              onChanged: (value) => _updateSettings(() => paperWidth = value!),
-            ),
+            label: _isSidewaysPrintRotation ? 'ارتفاع الورقة' : 'عرض الورق',
+            field: _paperSizeField(),
           ),
           const SizedBox(height: 10),
           Container(
@@ -787,6 +1004,9 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                   _settingFieldRow(
                     label: 'محاذاة الطباعة',
                     field: DropdownButtonFormField<String>(
+                      key: ValueKey<String>(
+                        'alignment-$printRotation-$contentAlignment',
+                      ),
                       initialValue: contentAlignment,
                       isDense: true,
                       isExpanded: true,
@@ -795,13 +1015,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                           .map(
                             (value) => DropdownMenuItem(
                               value: value,
-                              child: Text(
-                                value == 'center'
-                                    ? 'توسيط'
-                                    : value == 'right'
-                                    ? 'يمين'
-                                    : 'يسار',
-                              ),
+                              child: Text(_alignmentLabel(value)),
                             ),
                           )
                           .toList(),
@@ -877,6 +1091,20 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _paperSizeField() {
+    return DropdownButtonFormField<String>(
+      key: ValueKey<String>('paper-dropdown-$printRotation-$paperWidth'),
+      initialValue: paperWidth,
+      isDense: true,
+      isExpanded: true,
+      decoration: _dropdownFieldDecoration(),
+      items: _allowedPaperWidths
+          .map((e) => DropdownMenuItem(value: e, child: Text('$e mm')))
+          .toList(),
+      onChanged: (value) => _updateSettings(() => paperWidth = value!),
     );
   }
 
@@ -965,7 +1193,13 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     );
   }
 
-  Widget _counterRow(String label, int value, void Function(int) onChanged) {
+  Widget _counterRow(
+    String label,
+    int value,
+    void Function(int) onChanged, {
+    int minValue = 0,
+    int maxValue = 999,
+  }) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 4),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -996,7 +1230,9 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
               children: [
                 _stepperButton(
                   icon: Icons.remove_rounded,
-                  onPressed: () => onChanged((value - 1).clamp(0, 999)),
+                  onPressed: () => onChanged(
+                    (value - 1).clamp(minValue, maxValue).toInt(),
+                  ),
                 ),
                 SizedBox(
                   width: 44,
@@ -1011,7 +1247,9 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                 ),
                 _stepperButton(
                   icon: Icons.add_rounded,
-                  onPressed: () => onChanged((value + 1).clamp(0, 999)),
+                  onPressed: () => onChanged(
+                    (value + 1).clamp(minValue, maxValue).toInt(),
+                  ),
                 ),
               ],
             ),

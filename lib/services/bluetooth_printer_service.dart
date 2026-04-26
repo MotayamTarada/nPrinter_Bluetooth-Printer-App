@@ -776,6 +776,8 @@ Future<void> printBluetoothReceipt({
   String commandType = 'auto',
   String printColor = 'black',
   int printRotationDegrees = 0,
+  int textFontSize = 26,
+  String textFontFamily = 'NotoKufiArabicBold',
 }) async {
   try {
     final normalizedCommandType = _normalizeCommandType(commandType);
@@ -833,6 +835,8 @@ Future<void> printBluetoothReceipt({
         addBorder: textBorder,
         printerProfile: printerProfile,
         printColor: normalizedPrintColor,
+        fontSize: textFontSize.toDouble(),
+        fontFamily: textFontFamily,
       );
       final sentChunk = await _printImageByCommandType(
         commandType: effectiveCommandType,
