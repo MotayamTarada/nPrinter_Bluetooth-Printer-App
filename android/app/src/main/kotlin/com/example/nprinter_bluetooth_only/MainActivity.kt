@@ -20,10 +20,14 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
+import java.util.UUID
 
 class MainActivity : FlutterActivity() {
   private val channelName = "com.example.nprinter_bluetooth_only/bluetooth_scan"
   private val pdfIntentChannelName = "com.example.nprinter_bluetooth_only/pdf_intent"
+  private val printerStatusChannelName = "com.example.nprinter_bluetooth_only/printer_status"
+  private val sppUuid = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
   private val handler = Handler(Looper.getMainLooper())
   private var scanReceiver: BroadcastReceiver? = null
   private var pendingResult: MethodChannel.Result? = null
@@ -60,6 +64,20 @@ class MainActivity : FlutterActivity() {
           "discover" -> {
             val timeoutMs = (call.argument<Int>("timeoutMs") ?: 10_000).coerceIn(3_000, 20_000)
             startDiscovery(timeoutMs.toLong(), result)
+          }
+          else -> result.notImplemented()
+        }
+      }
+
+    MethodChannel(flutterEngine.dartExecutor.binaryMessenger, printerStatusChannelName)
+      .setMethodCallHandler { call: MethodCall, result: MethodChannel.Result ->
+        when (call.method) {
+          "checkEscPosStatus" -> {
+            val macAddress = call.argument<String>("mac").orEmpty()
+            Thread {
+              val payload = checkEscPosStatus(macAddress)
+              handler.post { result.success(payload) }
+            }.start()
           }
           else -> result.notImplemented()
         }
@@ -271,6 +289,203 @@ class MainActivity : FlutterActivity() {
         PackageManager.PERMISSION_GRANTED
       hasFineLocation || hasCoarseLocation
     }
+  }
+
+  private fun hasRequiredConnectPermission(): Boolean {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) ==
+        PackageManager.PERMISSION_GRANTED
+    } else {
+      true
+    }
+  }
+
+  private fun checkEscPosStatus(macAddress: String): Map<String, Any> {
+    val normalizedMac = macAddress.trim()
+    if (normalizedMac.isEmpty()) {
+      return printerStatusPayload(
+        checked = false,
+        supported = false,
+        canPrint = false,
+        issues = listOf("invalid_mac"),
+      )
+    }
+
+    val adapter = BluetoothAdapter.getDefaultAdapter()
+      ?: return printerStatusPayload(
+        checked = false,
+        supported = false,
+        canPrint = false,
+        issues = listOf("adapter_unavailable"),
+      )
+
+    if (!adapter.isEnabled) {
+      return printerStatusPayload(
+        checked = false,
+        supported = false,
+        canPrint = false,
+        issues = listOf("bluetooth_disabled"),
+      )
+    }
+
+    if (!hasRequiredConnectPermission()) {
+      return printerStatusPayload(
+        checked = false,
+        supported = false,
+        canPrint = false,
+        issues = listOf("permission_missing"),
+      )
+    }
+
+    val socket = try {
+      val device = adapter.getRemoteDevice(normalizedMac)
+      if (adapter.isDiscovering) {
+        adapter.cancelDiscovery()
+      }
+      device.createRfcommSocketToServiceRecord(sppUuid)
+    } catch (_: Exception) {
+      return printerStatusPayload(
+        checked = false,
+        supported = false,
+        canPrint = false,
+        issues = listOf("connect_failed"),
+      )
+    }
+
+    return try {
+      socket.connect()
+      val input = socket.inputStream
+      val output = socket.outputStream
+      val responses = linkedMapOf<Int, Int>()
+
+      for (request in listOf(1, 2, 3, 4)) {
+        drainInput(input)
+        output.write(byteArrayOf(0x10.toByte(), 0x04.toByte(), request.toByte()))
+        output.flush()
+        val response = readStatusByte(input, timeoutMs = 300)
+        if (response != null) {
+          responses[request] = response
+        }
+      }
+
+      if (responses.isEmpty()) {
+        printerStatusPayload(
+          checked = false,
+          supported = false,
+          canPrint = true,
+        )
+      } else {
+        val issues = mutableListOf<String>()
+        val warnings = mutableListOf<String>()
+
+        responses[1]?.let { printerStatus ->
+          if ((printerStatus and 0x08) != 0) {
+            issues.add("offline")
+          }
+        }
+
+        responses[2]?.let { offlineStatus ->
+          if ((offlineStatus and 0x04) != 0) {
+            issues.add("cover_open")
+          }
+          if ((offlineStatus and 0x20) != 0) {
+            issues.add("paper_stop")
+          }
+          if ((offlineStatus and 0x40) != 0) {
+            issues.add("error")
+          }
+        }
+
+        responses[3]?.let { errorStatus ->
+          if ((errorStatus and 0x04) != 0) {
+            issues.add("cutter_error")
+          }
+          if ((errorStatus and 0x08) != 0) {
+            issues.add("unrecoverable_error")
+          }
+          if ((errorStatus and 0x20) != 0) {
+            issues.add("auto_recoverable_error")
+          }
+        }
+
+        responses[4]?.let { paperStatus ->
+          if ((paperStatus and 0x60) != 0) {
+            issues.add("paper_end")
+          } else if ((paperStatus and 0x0C) != 0) {
+            warnings.add("paper_near_end")
+          }
+        }
+
+        printerStatusPayload(
+          checked = true,
+          supported = true,
+          canPrint = issues.isEmpty(),
+          issues = issues.distinct(),
+          warnings = warnings.distinct(),
+          raw = responses.mapKeys { it.key.toString() },
+        )
+      }
+    } catch (_: Exception) {
+      printerStatusPayload(
+        checked = false,
+        supported = false,
+        canPrint = false,
+        issues = listOf("connect_failed"),
+      )
+    } finally {
+      try {
+        socket.close()
+      } catch (_: Exception) {
+      }
+    }
+  }
+
+  private fun printerStatusPayload(
+    checked: Boolean,
+    supported: Boolean,
+    canPrint: Boolean,
+    issues: List<String> = emptyList(),
+    warnings: List<String> = emptyList(),
+    raw: Map<String, Int> = emptyMap(),
+  ): Map<String, Any> {
+    return mapOf(
+      "checked" to checked,
+      "supported" to supported,
+      "canPrint" to canPrint,
+      "issues" to issues,
+      "warnings" to warnings,
+      "raw" to raw,
+    )
+  }
+
+  private fun drainInput(input: InputStream) {
+    try {
+      while (input.available() > 0) {
+        input.read()
+      }
+    } catch (_: Exception) {
+    }
+  }
+
+  private fun readStatusByte(input: InputStream, timeoutMs: Long): Int? {
+    val deadline = System.currentTimeMillis() + timeoutMs
+    while (System.currentTimeMillis() < deadline) {
+      try {
+        if (input.available() > 0) {
+          return input.read() and 0xFF
+        }
+      } catch (_: Exception) {
+        return null
+      }
+
+      try {
+        Thread.sleep(20)
+      } catch (_: InterruptedException) {
+        Thread.currentThread().interrupt()
+        return null
+      }
+    }
+    return null
   }
 
   private fun collectBondedDevices(adapter: BluetoothAdapter) {

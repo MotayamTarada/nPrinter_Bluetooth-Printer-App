@@ -12,6 +12,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 
 import 'generate_image_service.dart';
+import 'printer_status_service.dart';
 
 Future<void> requestBluetoothPermissions() async {
   if (await Permission.bluetoothConnect.isDenied) {
@@ -58,6 +59,35 @@ String _resolveEffectiveCommandType(String commandType) {
 
 bool _isEscCommandType(String commandType) {
   return commandType == 'esc';
+}
+
+Future<PrinterStatusCheck> _checkEscPosPrinterStatus({
+  required String mac,
+  required String effectiveCommandType,
+}) async {
+  if (!_isEscCommandType(effectiveCommandType)) {
+    return const PrinterStatusCheck.skipped();
+  }
+
+  final status = await PrinterStatusService.checkEscPosStatus(mac);
+  await Future<void>.delayed(const Duration(milliseconds: 120));
+  return status;
+}
+
+String _printAcceptedMessage(PrinterStatusCheck status) {
+  if (status.hasBlockingIssue) {
+    return 'تم إرسال أمر الطباعة، لكن الطابعة تبلغ عن مشكلة: ${status.issueSummary}';
+  }
+
+  if (status.checked && status.supported) {
+    final warning = status.warningSummary;
+    if (warning.isNotEmpty) {
+      return 'تم إرسال أمر الطباعة، ولا توجد أخطاء مانعة. تنبيه: $warning';
+    }
+    return 'تم إرسال أمر الطباعة، والطابعة لا تبلغ عن أخطاء';
+  }
+
+  return 'تم إرسال أمر الطباعة للطابعة. لا يمكن تأكيد خروج الورقة تلقائيًا من هذه الطابعة';
 }
 
 String _normalizeCommandType(String commandType) {
@@ -768,6 +798,19 @@ Future<void> printBluetoothReceipt({
     await PrintBluetoothThermal.disconnect;
     await requestBluetoothPermissions();
 
+    final prePrintStatus = await _checkEscPosPrinterStatus(
+      mac: mac,
+      effectiveCommandType: effectiveCommandType,
+    );
+    if (prePrintStatus.hasBlockingIssue) {
+      if (!context.mounted) return;
+      _showMessage(
+        context,
+        'لا يمكن بدء الطباعة: ${prePrintStatus.issueSummary}',
+      );
+      return;
+    }
+
     final connected = await PrintBluetoothThermal.connect(
       macPrinterAddress: mac,
     );
@@ -842,8 +885,12 @@ Future<void> printBluetoothReceipt({
     }
 
     await PrintBluetoothThermal.disconnect;
+    final afterPrintStatus = await _checkEscPosPrinterStatus(
+      mac: mac,
+      effectiveCommandType: effectiveCommandType,
+    );
     if (!context.mounted) return;
-    _showMessage(context, 'تمت الطباعة بنجاح');
+    _showMessage(context, _printAcceptedMessage(afterPrintStatus));
   } catch (e) {
     await PrintBluetoothThermal.disconnect;
     if (context.mounted) {
@@ -896,6 +943,19 @@ Future<void> printBluetoothPdfReceipt({
 
     await PrintBluetoothThermal.disconnect;
     await requestBluetoothPermissions();
+
+    final prePrintStatus = await _checkEscPosPrinterStatus(
+      mac: mac,
+      effectiveCommandType: effectiveCommandType,
+    );
+    if (prePrintStatus.hasBlockingIssue) {
+      if (!context.mounted) return;
+      _showMessage(
+        context,
+        'لا يمكن بدء الطباعة: ${prePrintStatus.issueSummary}',
+      );
+      return;
+    }
 
     final connected = await PrintBluetoothThermal.connect(
       macPrinterAddress: mac,
@@ -991,8 +1051,12 @@ Future<void> printBluetoothPdfReceipt({
     }
 
     await PrintBluetoothThermal.disconnect;
+    final afterPrintStatus = await _checkEscPosPrinterStatus(
+      mac: mac,
+      effectiveCommandType: effectiveCommandType,
+    );
     if (!context.mounted) return;
-    _showMessage(context, 'تمت الطباعة بنجاح');
+    _showMessage(context, _printAcceptedMessage(afterPrintStatus));
   } catch (e) {
     await PrintBluetoothThermal.disconnect;
     if (context.mounted) {

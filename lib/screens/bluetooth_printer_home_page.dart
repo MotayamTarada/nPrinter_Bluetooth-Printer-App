@@ -699,125 +699,6 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
               onChanged: (value) => _updateSettings(() => paperWidth = value!),
             ),
           ),
-          const SizedBox(height: 8),
-          _settingFieldRow(
-            label: 'نوع الكوماند',
-            field: DropdownButtonFormField<String>(
-              initialValue: commandType,
-              isDense: true,
-              isExpanded: true,
-              decoration: _dropdownFieldDecoration(),
-              items: _allowedCommandTypes
-                  .map(
-                    (value) => DropdownMenuItem(
-                      value: value,
-                      child: Text(_commandTypeLabel(value)),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) => _updateSettings(() => commandType = value!),
-            ),
-          ),
-          const SizedBox(height: 8),
-          _settingFieldRow(
-            label: 'لون الطباعة',
-            field: DropdownButtonFormField<String>(
-              initialValue: printColor,
-              isDense: true,
-              isExpanded: true,
-              decoration: _dropdownFieldDecoration(),
-              items: _allowedPrintColors
-                  .map(
-                    (value) => DropdownMenuItem(
-                      value: value,
-                      child: Text(_printColorLabel(value)),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) => _updateSettings(() => printColor = value!),
-            ),
-          ),
-          const SizedBox(height: 8),
-          _settingFieldRow(
-            label: 'ملاءمة المقاس',
-            field: DropdownButtonFormField<String>(
-              initialValue: fitMode,
-              isDense: true,
-              isExpanded: true,
-              decoration: _dropdownFieldDecoration(),
-              items: _allowedFitModes
-                  .map(
-                    (value) => DropdownMenuItem(
-                      value: value,
-                      child: Text(
-                        value == 'fit_width' ? 'ملاءمة العرض' : 'الحجم الأصلي',
-                      ),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) => _updateSettings(() => fitMode = value!),
-            ),
-          ),
-          const SizedBox(height: 8),
-          _settingFieldRow(
-            label: 'محاذاة الطباعة',
-            field: DropdownButtonFormField<String>(
-              initialValue: contentAlignment,
-              isDense: true,
-              isExpanded: true,
-              decoration: _dropdownFieldDecoration(),
-              items: _allowedAlignments
-                  .map(
-                    (value) => DropdownMenuItem(
-                      value: value,
-                      child: Text(
-                        value == 'center'
-                            ? 'توسيط'
-                            : value == 'right'
-                            ? 'يمين'
-                            : 'يسار',
-                      ),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) =>
-                  _updateSettings(() => contentAlignment = value!),
-            ),
-          ),
-          const SizedBox(height: 8),
-          _settingFieldRow(
-            label: 'درجة الدوران',
-            field: DropdownButtonFormField<String>(
-              initialValue: printRotation,
-              isDense: true,
-              isExpanded: true,
-              decoration: _dropdownFieldDecoration(),
-              items: _allowedPrintRotations
-                  .map(
-                    (value) => DropdownMenuItem(
-                      value: value,
-                      child: Text(_printRotationLabel(value)),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) =>
-                  _updateSettings(() => printRotation = value!),
-            ),
-          ),
-          const SizedBox(height: 8),
-          _settingFieldRow(
-            label: 'نوع الصفارة',
-            field: DropdownButtonFormField<String>(
-              initialValue: beepType,
-              isDense: true,
-              isExpanded: true,
-              decoration: _dropdownFieldDecoration(),
-              items: _allowedBeepTypes
-                  .map((e) => DropdownMenuItem(value: e, child: Text(e)))
-                  .toList(),
-              onChanged: (value) => _updateSettings(() => beepType = value!),
-            ),
-          ),
           const SizedBox(height: 10),
           Container(
             decoration: BoxDecoration(
@@ -842,6 +723,127 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                   setState(() => isAdditionalSettingsExpanded = value);
                 },
                 children: [
+                  _settingFieldRow(
+                    label: 'نوع الكوماند',
+                    field: DropdownButtonFormField<String>(
+                      initialValue: commandType,
+                      isDense: true,
+                      isExpanded: true,
+                      decoration: _dropdownFieldDecoration(),
+                      items: _allowedCommandTypes
+                          .map(
+                            (value) => DropdownMenuItem(
+                              value: value,
+                              child: Text(_commandTypeLabel(value)),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) =>
+                          _updateSettings(() => commandType = value!),
+                    ),
+                  ),
+                  _settingFieldRow(
+                    label: 'لون الطباعة',
+                    field: DropdownButtonFormField<String>(
+                      initialValue: printColor,
+                      isDense: true,
+                      isExpanded: true,
+                      decoration: _dropdownFieldDecoration(),
+                      items: _allowedPrintColors
+                          .map(
+                            (value) => DropdownMenuItem(
+                              value: value,
+                              child: Text(_printColorLabel(value)),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) =>
+                          _updateSettings(() => printColor = value!),
+                    ),
+                  ),
+                  _settingFieldRow(
+                    label: 'ملاءمة المقاس',
+                    field: DropdownButtonFormField<String>(
+                      initialValue: fitMode,
+                      isDense: true,
+                      isExpanded: true,
+                      decoration: _dropdownFieldDecoration(),
+                      items: _allowedFitModes
+                          .map(
+                            (value) => DropdownMenuItem(
+                              value: value,
+                              child: Text(
+                                value == 'fit_width'
+                                    ? 'ملاءمة العرض'
+                                    : 'الحجم الأصلي',
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) =>
+                          _updateSettings(() => fitMode = value!),
+                    ),
+                  ),
+                  _settingFieldRow(
+                    label: 'محاذاة الطباعة',
+                    field: DropdownButtonFormField<String>(
+                      initialValue: contentAlignment,
+                      isDense: true,
+                      isExpanded: true,
+                      decoration: _dropdownFieldDecoration(),
+                      items: _allowedAlignments
+                          .map(
+                            (value) => DropdownMenuItem(
+                              value: value,
+                              child: Text(
+                                value == 'center'
+                                    ? 'توسيط'
+                                    : value == 'right'
+                                    ? 'يمين'
+                                    : 'يسار',
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) =>
+                          _updateSettings(() => contentAlignment = value!),
+                    ),
+                  ),
+                  _settingFieldRow(
+                    label: 'درجة الدوران',
+                    field: DropdownButtonFormField<String>(
+                      initialValue: printRotation,
+                      isDense: true,
+                      isExpanded: true,
+                      decoration: _dropdownFieldDecoration(),
+                      items: _allowedPrintRotations
+                          .map(
+                            (value) => DropdownMenuItem(
+                              value: value,
+                              child: Text(_printRotationLabel(value)),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) =>
+                          _updateSettings(() => printRotation = value!),
+                    ),
+                  ),
+                  _settingFieldRow(
+                    label: 'نوع الصفارة',
+                    field: DropdownButtonFormField<String>(
+                      initialValue: beepType,
+                      isDense: true,
+                      isExpanded: true,
+                      decoration: _dropdownFieldDecoration(),
+                      items: _allowedBeepTypes
+                          .map(
+                            (e) => DropdownMenuItem(value: e, child: Text(e)),
+                          )
+                          .toList(),
+                      onChanged: (value) =>
+                          _updateSettings(() => beepType = value!),
+                    ),
+                  ),
                   _checkboxSettingRow(
                     label: 'قص الورق تلقائيًا',
                     value: cutPaper,
