@@ -10,8 +10,21 @@ class AndroidBluetoothDiscoveryService {
     'com.example.nprinter_bluetooth_only/bluetooth_scan',
   );
 
+  static Future<int> androidSdkInt() async {
+    if (!Platform.isAndroid) {
+      return 0;
+    }
+
+    try {
+      return await _channel.invokeMethod<int>('androidSdkInt') ?? 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   static Future<List<BluetoothInfo>> discover({
     Duration timeout = const Duration(seconds: 10),
+    bool includeBonded = true,
   }) async {
     if (!Platform.isAndroid) {
       return const <BluetoothInfo>[];
@@ -19,7 +32,10 @@ class AndroidBluetoothDiscoveryService {
 
     final rawResult = await _channel.invokeMethod<List<dynamic>>(
       'discover',
-      <String, Object>{'timeoutMs': timeout.inMilliseconds},
+      <String, Object>{
+        'timeoutMs': timeout.inMilliseconds,
+        'includeBonded': includeBonded,
+      },
     );
 
     if (rawResult == null || rawResult.isEmpty) {
@@ -38,14 +54,29 @@ class AndroidBluetoothDiscoveryService {
       }
 
       final name = (entry['name'] ?? '').toString();
-      devices.add(
-        BluetoothInfo(
-          name: name,
-          macAdress: mac,
-        ),
-      );
+      devices.add(BluetoothInfo(name: name, macAdress: mac));
     }
 
     return devices;
+  }
+
+  static Future<bool> pairDevice({
+    required String macAddress,
+    String pin = '',
+  }) async {
+    if (!Platform.isAndroid) {
+      return false;
+    }
+
+    final raw = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+      'pairDevice',
+      <String, Object>{'mac': macAddress.trim(), 'pin': pin.trim()},
+    );
+
+    if (raw == null) {
+      return false;
+    }
+
+    return raw['success'] == true;
   }
 }

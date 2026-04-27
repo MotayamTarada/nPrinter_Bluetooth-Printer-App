@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -59,6 +59,10 @@ String _resolveEffectiveCommandType(String commandType) {
 
 bool _isEscCommandType(String commandType) {
   return commandType == 'esc';
+}
+
+bool _isColorMode(String printColor) {
+  return printColor == 'red' || printColor == 'black_red';
 }
 
 Future<PrinterStatusCheck> _checkEscPosPrinterStatus({
@@ -240,7 +244,10 @@ List<String> _splitTextIntoChunks(String text, {int maxCharsPerChunk = 180}) {
   return chunks;
 }
 
-List<int> _buildEscBeepBytes({required int count, required Generator generator}) {
+List<int> _buildEscBeepBytes({
+  required int count,
+  required Generator generator,
+}) {
   if (count <= 0) {
     return const <int>[];
   }
@@ -249,12 +256,7 @@ List<int> _buildEscBeepBytes({required int count, required Generator generator})
   var remaining = count;
   while (remaining > 0) {
     final chunk = remaining > 9 ? 9 : remaining;
-    bytes.addAll(
-      generator.beep(
-        n: chunk,
-        duration: PosBeepDuration.beep200ms,
-      ),
-    );
+    bytes.addAll(generator.beep(n: chunk, duration: PosBeepDuration.beep200ms));
     remaining -= chunk;
   }
   return bytes;
@@ -466,10 +468,7 @@ List<int> _buildTsplBitmapJob({
   _appendAsciiLine(output, 'DIRECTION 1');
   _appendAsciiLine(output, 'REFERENCE 0,0');
   _appendAsciiLine(output, 'CLS');
-  _appendAsciiRaw(
-    output,
-    'BITMAP $xOffset,0,$widthBytes,${image.height},0,',
-  );
+  _appendAsciiRaw(output, 'BITMAP $xOffset,0,$widthBytes,${image.height},0,');
   output.addAll(bitmapData);
   _appendAsciiLine(output, '');
   _appendAsciiLine(output, 'PRINT 1,1');
@@ -493,10 +492,7 @@ List<int> _buildCpclBitmapJob({
   final bitmapData = _toMonochromeBitmapData(image);
 
   _appendAsciiLine(output, '! 0 200 200 $pageHeightDots 1');
-  _appendAsciiRaw(
-    output,
-    'EG $widthBytes ${image.height} $xOffset 0 ',
-  );
+  _appendAsciiRaw(output, 'EG $widthBytes ${image.height} $xOffset 0 ');
   output.addAll(bitmapData);
   _appendAsciiLine(output, '');
   _appendAsciiLine(output, 'FORM');
@@ -577,7 +573,9 @@ Future<img.Image> _prepareImageForCommand(
   String printerProfile = 'auto',
   int printRotationDegrees = 0,
 }) async {
-  final byteData = await flutterImage.toByteData(format: ui.ImageByteFormat.png);
+  final byteData = await flutterImage.toByteData(
+    format: ui.ImageByteFormat.png,
+  );
   if (byteData == null) {
     throw Exception('تعذر تحويل الصورة');
   }
@@ -781,8 +779,9 @@ Future<void> printBluetoothReceipt({
 }) async {
   try {
     final normalizedCommandType = _normalizeCommandType(commandType);
-    final effectiveCommandType =
-        _resolveEffectiveCommandType(normalizedCommandType);
+    var effectiveCommandType = _resolveEffectiveCommandType(
+      normalizedCommandType,
+    );
     final normalizedPrintColor = _normalizePrintColor(printColor);
 
     if (!_supportsCommandType(normalizedCommandType)) {
@@ -791,6 +790,15 @@ Future<void> printBluetoothReceipt({
         'نوع الكوماند غير مدعوم. الأنواع المتاحة: Auto / ESC / TSPL / CPCL',
       );
       return;
+    }
+
+    if (_isColorMode(normalizedPrintColor) &&
+        !_isEscCommandType(effectiveCommandType)) {
+      effectiveCommandType = 'esc';
+      _showMessage(
+        context,
+        'وضع اللون الأحمر/الثنائي يعمل على ESC فقط. تم التحويل تلقائيًا إلى ESC.',
+      );
     }
     final paperSize = _resolvePaperSize(paperWidth);
     final profile = await CapabilityProfile.load();
@@ -924,8 +932,9 @@ Future<void> printBluetoothPdfReceipt({
 
   try {
     final normalizedCommandType = _normalizeCommandType(commandType);
-    final effectiveCommandType =
-        _resolveEffectiveCommandType(normalizedCommandType);
+    var effectiveCommandType = _resolveEffectiveCommandType(
+      normalizedCommandType,
+    );
     final normalizedPrintColor = _normalizePrintColor(printColor);
 
     if (!_supportsCommandType(normalizedCommandType)) {
@@ -934,6 +943,15 @@ Future<void> printBluetoothPdfReceipt({
         'نوع الكوماند غير مدعوم. الأنواع المتاحة: Auto / ESC / TSPL / CPCL',
       );
       return;
+    }
+
+    if (_isColorMode(normalizedPrintColor) &&
+        !_isEscCommandType(effectiveCommandType)) {
+      effectiveCommandType = 'esc';
+      _showMessage(
+        context,
+        'وضع اللون الأحمر/الثنائي يعمل على ESC فقط. تم التحويل تلقائيًا إلى ESC.',
+      );
     }
     final paperSize = _resolvePaperSize(paperWidth);
     final rasterTargetWidth = _resolveRasterTargetWidth(
@@ -985,8 +1003,8 @@ Future<void> printBluetoothPdfReceipt({
             : page.width.toDouble().clamp(300.0, 2400.0);
         final safePageWidth = page.width <= 0 ? 1.0 : page.width.toDouble();
         final safePageHeight = page.height.toDouble();
-        final dynamicHeight =
-            ((renderWidth * safePageHeight) / safePageWidth).clamp(300.0, 5000.0);
+        final dynamicHeight = ((renderWidth * safePageHeight) / safePageWidth)
+            .clamp(300.0, 5000.0);
 
         final pageImage = await page.render(
           width: renderWidth,

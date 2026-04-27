@@ -1,21 +1,29 @@
-﻿import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 Future<String?> scanBarcodeInDialog(
   BuildContext context, {
   TextEditingController? controller,
   List<BarcodeFormat>? formats,
 }) async {
-  final isSupported = !kIsWeb &&
+  final isSupported =
+      !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.iOS);
   if (!isSupported) {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('قارئ الباركود يعمل على Android و iOS فقط'),
-      ),
+      const SnackBar(content: Text('قارئ الباركود يعمل على Android و iOS فقط')),
     );
+    return null;
+  }
+
+  final hasCameraPermission = await _ensureCameraPermission(context);
+  if (!hasCameraPermission) {
+    return null;
+  }
+  if (!context.mounted) {
     return null;
   }
 
@@ -29,6 +37,68 @@ Future<String?> scanBarcodeInDialog(
     controller.text = result.trim();
   }
   return result;
+}
+
+Future<bool> _ensureCameraPermission(BuildContext context) async {
+  if (await Permission.camera.isGranted) {
+    return true;
+  }
+  if (!context.mounted) {
+    return false;
+  }
+
+  final allow = await showDialog<bool>(
+    context: context,
+    builder: (context) {
+      return AlertDialog(
+        title: const Text('صلاحية الكاميرا'),
+        content: const Text(
+          'لفتح قارئ الباركود نحتاج إذن استخدام الكاميرا داخل التطبيق.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('متابعة'),
+          ),
+        ],
+      );
+    },
+  );
+
+  if (allow != true) {
+    return false;
+  }
+  if (!context.mounted) {
+    return false;
+  }
+
+  final status = await Permission.camera.request();
+  if (status.isGranted || status.isLimited) {
+    return true;
+  }
+  if (!context.mounted) {
+    return false;
+  }
+
+  if (status.isPermanentlyDenied) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'صلاحية الكاميرا مرفوضة نهائيًا. افتح الإعدادات للسماح بها.',
+        ),
+      ),
+    );
+    await openAppSettings();
+  } else {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('لم يتم منح صلاحية الكاميرا')));
+  }
+  return false;
 }
 
 class _BarcodeScannerDialog extends StatefulWidget {
@@ -75,7 +145,9 @@ class _BarcodeScannerDialogState extends State<_BarcodeScannerDialog> {
     const radius = 16.0;
     return Dialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(radius),
+      ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(radius),
         child: AspectRatio(

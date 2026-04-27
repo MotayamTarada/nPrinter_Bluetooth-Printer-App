@@ -34,9 +34,18 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   static const String _printRotationKey = 'printer.printRotation';
   static const String _commandTypeKey = 'printer.commandType';
   static const String _printTextKey = 'printer.printText';
+  static const String _customPaperWidthKey = 'printer.customPaperWidth';
+  static const String _defaultPrintText = 'nPrinter';
   static const String _textFontSizeKey = 'printer.textFontSize';
   static const String _textFontFamilyKey = 'printer.textFontFamily';
-  static const List<String> _allowedPaperWidths = <String>['58', '80', '112'];
+  static const String _customPaperWidthValue = 'custom';
+  static const String _defaultCustomPaperWidth = '112';
+  static const List<String> _allowedPaperWidths = <String>[
+    '58',
+    '80',
+    '112',
+    _customPaperWidthValue,
+  ];
   static const List<String> _allowedBeepTypes = <String>['0x07', '0x1B, 0x42'];
   static const List<String> _allowedTextFontFamilies = <String>[
     'NotoKufiArabicBold',
@@ -93,7 +102,10 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   String? selectedPdfName;
 
   final macController = TextEditingController();
-  final textController = TextEditingController(text: 'nPrinter');
+  final textController = TextEditingController(text: _defaultPrintText);
+  final customPaperWidthController = TextEditingController(
+    text: _defaultCustomPaperWidth,
+  );
   final textFocusNode = FocusNode();
   SharedPreferences? _prefs;
   bool _isRestoringPreferences = false;
@@ -108,6 +120,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     super.initState();
     macController.addListener(_onTextInputsChanged);
     textController.addListener(_onTextInputsChanged);
+    customPaperWidthController.addListener(_onTextInputsChanged);
     PdfIntentService.setListener(_handleIncomingPdfIntent);
     unawaited(_loadSavedSettings());
     unawaited(_loadInitialPdfIntent());
@@ -118,8 +131,10 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     PdfIntentService.setListener(null);
     macController.removeListener(_onTextInputsChanged);
     textController.removeListener(_onTextInputsChanged);
+    customPaperWidthController.removeListener(_onTextInputsChanged);
     macController.dispose();
     textController.dispose();
+    customPaperWidthController.dispose();
     textFocusNode.dispose();
     super.dispose();
   }
@@ -167,6 +182,15 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     return _allowedPaperWidths.contains(normalized) ? normalized : '58';
   }
 
+  String _validatedCustomPaperWidth(String value) {
+    final normalized = value.trim().replaceAll(',', '.');
+    final parsed = double.tryParse(normalized);
+    if (parsed == null || parsed <= 0) {
+      return _defaultCustomPaperWidth;
+    }
+    return normalized;
+  }
+
   String _validatedBeepType(String value) {
     return _allowedBeepTypes.contains(value) ? value : '0x07';
   }
@@ -206,7 +230,10 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   }
 
   double? _parsedPaperWidth() {
-    final normalized = paperWidth.trim().replaceAll(',', '.');
+    final value = paperWidth == _customPaperWidthValue
+        ? customPaperWidthController.text
+        : paperWidth;
+    final normalized = value.trim().replaceAll(',', '.');
     final parsed = double.tryParse(normalized);
     if (parsed == null || parsed <= 0) {
       return null;
@@ -289,9 +316,20 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     final prefs = await SharedPreferences.getInstance();
     _prefs = prefs;
 
-    final loadedPaperWidth = _validatedPaperWidth(
-      prefs.getString(_paperWidthKey) ?? paperWidth,
+    final savedPaperWidth = prefs.getString(_paperWidthKey) ?? paperWidth;
+    var loadedPaperWidth = _validatedPaperWidth(savedPaperWidth);
+    var loadedCustomPaperWidth = _validatedCustomPaperWidth(
+      prefs.getString(_customPaperWidthKey) ?? customPaperWidthController.text,
     );
+    if (!_allowedPaperWidths.contains(savedPaperWidth.trim().toLowerCase())) {
+      final migratedPaperWidth = _validatedCustomPaperWidth(savedPaperWidth);
+      if (migratedPaperWidth != _defaultCustomPaperWidth ||
+          savedPaperWidth.trim().replaceAll(',', '.') ==
+              _defaultCustomPaperWidth) {
+        loadedPaperWidth = _customPaperWidthValue;
+        loadedCustomPaperWidth = migratedPaperWidth;
+      }
+    }
     final loadedMac = prefs.getString(_macAddressKey) ?? '';
     final loadedBeepBefore = (prefs.getInt(_beepBeforeKey) ?? beepBefore).clamp(
       0,
@@ -331,8 +369,9 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     final loadedTextFontFamily = _validatedTextFontFamily(
       prefs.getString(_textFontFamilyKey) ?? textFontFamily,
     );
-    final loadedPrintText =
-        prefs.getString(_printTextKey) ?? textController.text;
+    final loadedPrintText = prefs.containsKey(_printTextKey)
+        ? (prefs.getString(_printTextKey) ?? '')
+        : _defaultPrintText;
 
     if (!mounted) {
       return;
@@ -341,6 +380,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     _isRestoringPreferences = true;
     macController.text = loadedMac;
     textController.text = loadedPrintText;
+    customPaperWidthController.text = loadedCustomPaperWidth;
     setState(() {
       paperWidth = loadedPaperWidth;
       beepBefore = loadedBeepBefore;
@@ -370,6 +410,10 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
 
     await Future.wait<void>([
       prefs.setString(_paperWidthKey, paperWidth),
+      prefs.setString(
+        _customPaperWidthKey,
+        customPaperWidthController.text.trim(),
+      ),
       prefs.setString(_macAddressKey, macController.text.trim()),
       prefs.setInt(_beepBeforeKey, beepBefore),
       prefs.setInt(_beepAfterKey, beepAfter),
@@ -666,132 +710,6 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                               maxLines: null,
                               onTapOutside: (_) => textFocusNode.unfocus(),
                             ),
-                            const SizedBox(height: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 10,
-                              ),
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: Colors.black12),
-                                color: const Color(0xffE8F4FF).withValues(alpha: 0.35),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    'إعدادات النص',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                      color: Colors.black87,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 10),
-                                  Row(
-                                    crossAxisAlignment: CrossAxisAlignment.end,
-                                    children: [
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            const Text(
-                                              'نوع الخط',
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w500,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 4),
-                                            SizedBox(
-                                              height: 42,
-                                              child: DropdownButtonFormField<String>(
-                                                initialValue: textFontFamily,
-                                                isDense: true,
-                                                isExpanded: true,
-                                                decoration: _dropdownFieldDecoration().copyWith(
-                                                  contentPadding: const EdgeInsets.symmetric(
-                                                    horizontal: 8,
-                                                    vertical: 8,
-                                                  ),
-                                                ),
-                                                items: _allowedTextFontFamilies
-                                                    .map(
-                                                      (value) => DropdownMenuItem(
-                                                        value: value,
-                                                        child: Text(
-                                                          _textFontFamilyLabel(value),
-                                                          style: const TextStyle(fontSize: 13),
-                                                        ),
-                                                      ),
-                                                    )
-                                                    .toList(),
-                                                onChanged: (value) => _updateSettings(
-                                                  () => textFontFamily = value!,
-                                                ),
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      const SizedBox(width: 16),
-                                      Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          const Text(
-                                            'حجم الخط',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Container(
-                                            height: 42,
-                                            decoration: BoxDecoration(
-                                              borderRadius: BorderRadius.circular(8),
-                                              border: Border.all(color: Colors.black26),
-                                              color: Colors.white.withValues(alpha: 0.72),
-                                            ),
-                                            child: Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              mainAxisAlignment: MainAxisAlignment.center,
-                                              textDirection: TextDirection.ltr,
-                                              children: [
-                                                _stepperButton(
-                                                  icon: Icons.remove_rounded,
-                                                  onPressed: () => _updateSettings(
-                                                    () => textFontSize = _validatedTextFontSize(textFontSize - 1),
-                                                  ),
-                                                ),
-                                                SizedBox(
-                                                  width: 38,
-                                                  child: Text(
-                                                    '$textFontSize',
-                                                    textAlign: TextAlign.center,
-                                                    style: const TextStyle(
-                                                      fontSize: 14,
-                                                      fontWeight: FontWeight.w600,
-                                                    ),
-                                                  ),
-                                                ),
-                                                _stepperButton(
-                                                  icon: Icons.add_rounded,
-                                                  onPressed: () => _updateSettings(
-                                                    () => textFontSize = _validatedTextFontSize(textFontSize + 1),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            ),
                           ],
                           const SizedBox(height: 12),
                           _settingsSection(),
@@ -940,6 +858,16 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                   setState(() => isAdditionalSettingsExpanded = value);
                 },
                 children: [
+                  if (selectedPdfPath == null) ...[
+                    _settingFieldRow(
+                      label: 'نوع الخط',
+                      field: _textFontFamilyField(),
+                    ),
+                    _settingFieldRow(
+                      label: 'حجم الخط',
+                      field: _textFontSizeField(),
+                    ),
+                  ],
                   _settingFieldRow(
                     label: 'نوع الكوماند',
                     field: DropdownButtonFormField<String>(
@@ -1095,16 +1023,115 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   }
 
   Widget _paperSizeField() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        DropdownButtonFormField<String>(
+          key: ValueKey<String>('paper-dropdown-$printRotation-$paperWidth'),
+          initialValue: paperWidth,
+          isDense: true,
+          isExpanded: true,
+          decoration: _dropdownFieldDecoration(),
+          items: _allowedPaperWidths
+              .map(
+                (value) => DropdownMenuItem(
+                  value: value,
+                  child: Text(_paperWidthLabel(value)),
+                ),
+              )
+              .toList(),
+          onChanged: (value) {
+            if (value == null) {
+              return;
+            }
+            _updateSettings(() {
+              if (value == _customPaperWidthValue &&
+                  customPaperWidthController.text.trim().isEmpty) {
+                customPaperWidthController.text = _defaultCustomPaperWidth;
+              }
+              paperWidth = value;
+            });
+          },
+        ),
+        if (paperWidth == _customPaperWidthValue) ...[
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: customPaperWidthController,
+            textDirection: TextDirection.ltr,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: _dropdownFieldDecoration().copyWith(
+              labelText: 'عرض مخصص mm',
+              hintText: 'مثال 100',
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  String _paperWidthLabel(String value) {
+    return value == _customPaperWidthValue ? 'مخصص' : '$value mm';
+  }
+
+  Widget _textFontFamilyField() {
     return DropdownButtonFormField<String>(
-      key: ValueKey<String>('paper-dropdown-$printRotation-$paperWidth'),
-      initialValue: paperWidth,
+      initialValue: textFontFamily,
       isDense: true,
       isExpanded: true,
       decoration: _dropdownFieldDecoration(),
-      items: _allowedPaperWidths
-          .map((e) => DropdownMenuItem(value: e, child: Text('$e mm')))
+      items: _allowedTextFontFamilies
+          .map(
+            (value) => DropdownMenuItem(
+              value: value,
+              child: Text(_textFontFamilyLabel(value)),
+            ),
+          )
           .toList(),
-      onChanged: (value) => _updateSettings(() => paperWidth = value!),
+      onChanged: (value) => _updateSettings(() => textFontFamily = value!),
+    );
+  }
+
+  Widget _textFontSizeField() {
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Container(
+        height: 42,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.black26),
+          color: Colors.white.withValues(alpha: 0.72),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          textDirection: TextDirection.ltr,
+          children: [
+            _stepperButton(
+              icon: Icons.remove_rounded,
+              onPressed: () => _updateSettings(
+                () => textFontSize = _validatedTextFontSize(textFontSize - 1),
+              ),
+            ),
+            SizedBox(
+              width: 44,
+              child: Text(
+                '$textFontSize',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            _stepperButton(
+              icon: Icons.add_rounded,
+              onPressed: () => _updateSettings(
+                () => textFontSize = _validatedTextFontSize(textFontSize + 1),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -1230,9 +1257,8 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
               children: [
                 _stepperButton(
                   icon: Icons.remove_rounded,
-                  onPressed: () => onChanged(
-                    (value - 1).clamp(minValue, maxValue).toInt(),
-                  ),
+                  onPressed: () =>
+                      onChanged((value - 1).clamp(minValue, maxValue).toInt()),
                 ),
                 SizedBox(
                   width: 44,
@@ -1247,9 +1273,8 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                 ),
                 _stepperButton(
                   icon: Icons.add_rounded,
-                  onPressed: () => onChanged(
-                    (value + 1).clamp(minValue, maxValue).toInt(),
-                  ),
+                  onPressed: () =>
+                      onChanged((value + 1).clamp(minValue, maxValue).toInt()),
                 ),
               ],
             ),

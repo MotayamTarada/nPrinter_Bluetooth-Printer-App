@@ -30,6 +30,7 @@ class MainActivity : FlutterActivity() {
   private val sppUuid = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
   private val handler = Handler(Looper.getMainLooper())
   private var scanReceiver: BroadcastReceiver? = null
+  private var pairingReceiver: BroadcastReceiver? = null
   private var pendingResult: MethodChannel.Result? = null
   private val discoveredDevices = linkedMapOf<String, String>()
   private var timeoutRunnable: Runnable? = null
@@ -61,9 +62,21 @@ class MainActivity : FlutterActivity() {
     MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
       .setMethodCallHandler { call: MethodCall, result: MethodChannel.Result ->
         when (call.method) {
+          "androidSdkInt" -> {
+            result.success(Build.VERSION.SDK_INT)
+          }
           "discover" -> {
             val timeoutMs = (call.argument<Int>("timeoutMs") ?: 10_000).coerceIn(3_000, 20_000)
-            startDiscovery(timeoutMs.toLong(), result)
+            val includeBonded = call.argument<Boolean>("includeBonded") ?: true
+            startDiscovery(timeoutMs.toLong(), includeBonded, result)
+          }
+          "pairDevice" -> {
+            val macAddress = call.argument<String>("mac").orEmpty()
+            val pin = call.argument<String>("pin").orEmpty()
+            Thread {
+              val payload = pairDevice(macAddress, pin)
+              handler.post { result.success(payload) }
+            }.start()
           }
           else -> result.notImplemented()
         }
@@ -88,6 +101,20 @@ class MainActivity : FlutterActivity() {
     super.onNewIntent(intent)
     setIntent(intent)
     handleIncomingPdfIntent(intent, notifyFlutter = true)
+  }
+
+  override fun onDestroy() {
+    unregisterPairingReceiver(pairingReceiver)
+    scanReceiver?.let {
+      try {
+        unregisterReceiver(it)
+      } catch (_: IllegalArgumentException) {
+      }
+    }
+    scanReceiver = null
+    timeoutRunnable?.let(handler::removeCallbacks)
+    timeoutRunnable = null
+    super.onDestroy()
   }
 
   private fun handleIncomingPdfIntent(intent: Intent?, notifyFlutter: Boolean) {
@@ -209,7 +236,11 @@ class MainActivity : FlutterActivity() {
     return withExtension.replace(Regex("""[\\/:*?"<>|]"""), "_")
   }
 
-  private fun startDiscovery(timeoutMs: Long, result: MethodChannel.Result) {
+  private fun startDiscovery(
+    timeoutMs: Long,
+    includeBonded: Boolean,
+    result: MethodChannel.Result,
+  ) {
     if (pendingResult != null) {
       result.error("busy", "Bluetooth discovery is already running.", null)
       return
@@ -233,14 +264,15 @@ class MainActivity : FlutterActivity() {
 
     pendingResult = result
     discoveredDevices.clear()
-    collectBondedDevices(adapter)
+    if (includeBonded) {
+      collectBondedDevices(adapter)
+    }
 
     val receiver = object : BroadcastReceiver() {
       override fun onReceive(context: Context?, intent: Intent?) {
         when (intent?.action) {
           BluetoothDevice.ACTION_FOUND -> {
-            val device: BluetoothDevice? =
-              intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+            val device = deviceFromIntent(intent)
             addDiscoveredDevice(device)
           }
           BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> finishDiscovery()
@@ -255,7 +287,7 @@ class MainActivity : FlutterActivity() {
     }
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-      registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+      registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
     } else {
       registerReceiver(receiver, filter)
     }
@@ -298,6 +330,195 @@ class MainActivity : FlutterActivity() {
     } else {
       true
     }
+  }
+
+  private fun pairDevice(macAddress: String, pin: String): Map<String, Any> {
+    val normalizedMac = macAddress.trim()
+    if (normalizedMac.isEmpty()) {
+      return mapOf(
+        "success" to false,
+        "alreadyBonded" to false,
+        "started" to false,
+        "state" to "invalid_mac",
+      )
+    }
+
+    val adapter = BluetoothAdapter.getDefaultAdapter()
+      ?: return mapOf(
+        "success" to false,
+        "alreadyBonded" to false,
+        "started" to false,
+        "state" to "adapter_unavailable",
+      )
+
+    if (!adapter.isEnabled) {
+      return mapOf(
+        "success" to false,
+        "alreadyBonded" to false,
+        "started" to false,
+        "state" to "bluetooth_disabled",
+      )
+    }
+
+    if (!hasRequiredConnectPermission()) {
+      return mapOf(
+        "success" to false,
+        "alreadyBonded" to false,
+        "started" to false,
+        "state" to "permission_missing",
+      )
+    }
+
+    return try {
+      val device = adapter.getRemoteDevice(normalizedMac)
+      if (device.bondState == BluetoothDevice.BOND_BONDED) {
+        mapOf(
+          "success" to true,
+          "alreadyBonded" to true,
+          "started" to true,
+          "state" to "bonded",
+        )
+      } else {
+        if (adapter.isDiscovering) {
+          adapter.cancelDiscovery()
+        }
+
+        val effectivePin = pin.trim().ifEmpty { "0000" }
+        val receiver = registerPairingReceiver(normalizedMac, effectivePin)
+        try {
+          val pinApplied = applyPairingPinIfPossible(device, effectivePin)
+          val started = device.createBond()
+          val finalState = waitForBondState(device, timeoutMs = 25_000)
+          mapOf(
+            "success" to (finalState == BluetoothDevice.BOND_BONDED),
+            "alreadyBonded" to false,
+            "started" to started,
+            "pinApplied" to pinApplied,
+            "state" to when (finalState) {
+              BluetoothDevice.BOND_BONDED -> "bonded"
+              BluetoothDevice.BOND_BONDING -> "bonding"
+              else -> "none"
+            },
+          )
+        } finally {
+          unregisterPairingReceiver(receiver)
+        }
+      }
+    } catch (_: SecurityException) {
+      mapOf(
+        "success" to false,
+        "alreadyBonded" to false,
+        "started" to false,
+        "state" to "permission_missing",
+      )
+    } catch (_: IllegalArgumentException) {
+      mapOf(
+        "success" to false,
+        "alreadyBonded" to false,
+        "started" to false,
+        "state" to "invalid_mac",
+      )
+    } catch (_: Exception) {
+      mapOf(
+        "success" to false,
+        "alreadyBonded" to false,
+        "started" to false,
+        "state" to "pairing_failed",
+      )
+    }
+  }
+
+  private fun applyPairingPinIfPossible(device: BluetoothDevice, pin: String): Boolean {
+    val normalizedPin = pin.trim()
+    if (normalizedPin.isEmpty()) {
+      return false
+    }
+
+    return try {
+      val setPinMethod = device.javaClass.getMethod("setPin", ByteArray::class.java)
+      setPinMethod.invoke(device, normalizedPin.toByteArray(Charsets.UTF_8))
+      runCatching {
+        val confirmMethod = device.javaClass.getMethod("setPairingConfirmation", Boolean::class.javaPrimitiveType)
+        confirmMethod.invoke(device, true)
+      }
+      true
+    } catch (_: Exception) {
+      false
+    }
+  }
+
+  private fun registerPairingReceiver(macAddress: String, pin: String): BroadcastReceiver? {
+    val normalizedMac = macAddress.trim().uppercase()
+    val normalizedPin = pin.trim()
+    if (normalizedMac.isEmpty() || normalizedPin.isEmpty()) {
+      return null
+    }
+
+    unregisterPairingReceiver(pairingReceiver)
+
+    val receiver = object : BroadcastReceiver() {
+      override fun onReceive(context: Context?, intent: Intent?) {
+        if (intent?.action != BluetoothDevice.ACTION_PAIRING_REQUEST) {
+          return
+        }
+
+        val device = deviceFromIntent(intent) ?: return
+        val deviceMac = device.address?.trim()?.uppercase().orEmpty()
+        if (deviceMac != normalizedMac) {
+          return
+        }
+
+        if (applyPairingPinIfPossible(device, normalizedPin)) {
+          runCatching { abortBroadcast() }
+        }
+      }
+    }
+
+    val filter = IntentFilter(BluetoothDevice.ACTION_PAIRING_REQUEST).apply {
+      priority = IntentFilter.SYSTEM_HIGH_PRIORITY
+    }
+
+    return try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+      } else {
+        @Suppress("DEPRECATION")
+        registerReceiver(receiver, filter)
+      }
+      pairingReceiver = receiver
+      receiver
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  private fun unregisterPairingReceiver(receiver: BroadcastReceiver?) {
+    val target = receiver ?: return
+    try {
+      unregisterReceiver(target)
+    } catch (_: IllegalArgumentException) {
+    }
+    if (pairingReceiver === target) {
+      pairingReceiver = null
+    }
+  }
+
+  private fun waitForBondState(device: BluetoothDevice, timeoutMs: Long): Int {
+    val deadline = System.currentTimeMillis() + timeoutMs
+    var latest = device.bondState
+    while (System.currentTimeMillis() < deadline) {
+      latest = device.bondState
+      if (latest == BluetoothDevice.BOND_BONDED || latest == BluetoothDevice.BOND_NONE) {
+        return latest
+      }
+      try {
+        Thread.sleep(250)
+      } catch (_: InterruptedException) {
+        Thread.currentThread().interrupt()
+        return latest
+      }
+    }
+    return latest
   }
 
   private fun checkEscPosStatus(macAddress: String): Map<String, Any> {
@@ -508,6 +729,15 @@ class MainActivity : FlutterActivity() {
       newName.isNotEmpty() -> newName
       currentName != null -> currentName
       else -> ""
+    }
+  }
+
+  private fun deviceFromIntent(intent: Intent): BluetoothDevice? {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+    } else {
+      @Suppress("DEPRECATION")
+      intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
     }
   }
 

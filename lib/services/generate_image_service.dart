@@ -109,18 +109,16 @@ Future<ui.Image> generateSimpleTextImage(
   double fontSize = 26,
   String fontFamily = 'NotoKufiArabicBold',
 }) async {
-  final width = _paperPixelWidth(
-    paperWidth,
-    printerProfile: printerProfile,
-  );
+  final width = _paperPixelWidth(paperWidth, printerProfile: printerProfile);
   const padding = 20.0;
 
   final printFont = _resolvePrintFont(fontFamily);
   await _ensurePrintFontLoaded(printFont);
 
   final normalizedPrintColor = printColor.trim().toLowerCase();
-  final textPaintColor =
-      normalizedPrintColor == 'red' || normalizedPrintColor == 'black_red'
+  // In dual-color mode (black_red), keep generated text black by default.
+  // Red layer is intended for source content that is actually red (e.g. PDF/image).
+  final textPaintColor = normalizedPrintColor == 'red'
       ? Colors.red
       : Colors.black;
 
