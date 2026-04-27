@@ -65,6 +65,10 @@ bool _isColorMode(String printColor) {
   return printColor == 'red' || printColor == 'black_red';
 }
 
+const String _dualColorPassAuto = 'auto';
+const String _dualColorPassBlack = 'black';
+const String _dualColorPassRed = 'red';
+
 Future<PrinterStatusCheck> _checkEscPosPrinterStatus({
   required String mac,
   required String effectiveCommandType,
@@ -648,6 +652,7 @@ Future<bool> _printImageByCommandType({
   required String printColor,
   required int printRotationDegrees,
   required Generator generator,
+  String dualColorPass = _dualColorPassAuto,
 }) async {
   final preparedImage = await _prepareImageForCommand(
     image,
@@ -661,8 +666,14 @@ Future<bool> _printImageByCommandType({
 
     if (printColor == 'black_red') {
       final layers = _splitDualColorLayers(preparedImage);
+      final shouldPrintBlack =
+          dualColorPass == _dualColorPassAuto ||
+          dualColorPass == _dualColorPassBlack;
+      final shouldPrintRed =
+          dualColorPass == _dualColorPassAuto ||
+          dualColorPass == _dualColorPassRed;
 
-      if (layers.hasBlackPixels) {
+      if (shouldPrintBlack && layers.hasBlackPixels) {
         final blackBytes = await _convertPreparedImageToEscPosBytes(
           layers.blackLayer,
           paperWidthMm,
@@ -680,7 +691,7 @@ Future<bool> _printImageByCommandType({
         await Future<void>.delayed(const Duration(milliseconds: 60));
       }
 
-      if (layers.hasRedPixels) {
+      if (shouldPrintRed && layers.hasRedPixels) {
         final redBytes = await _convertPreparedImageToEscPosBytes(
           layers.redLayer,
           paperWidthMm,
@@ -720,7 +731,13 @@ Future<bool> _printImageByCommandType({
 
   if (printColor == 'black_red') {
     final layers = _splitDualColorLayers(preparedImage);
-    if (layers.hasBlackPixels) {
+    final shouldPrintBlack =
+        dualColorPass == _dualColorPassAuto ||
+        dualColorPass == _dualColorPassBlack;
+    final shouldPrintRed =
+        dualColorPass == _dualColorPassAuto ||
+        dualColorPass == _dualColorPassRed;
+    if (shouldPrintBlack && layers.hasBlackPixels) {
       final sentBlack = await _printRawBitmapInStrips(
         commandType: commandType,
         image: layers.blackLayer,
@@ -733,7 +750,7 @@ Future<bool> _printImageByCommandType({
       }
       await Future<void>.delayed(const Duration(milliseconds: 60));
     }
-    if (layers.hasRedPixels) {
+    if (shouldPrintRed && layers.hasRedPixels) {
       final sentRed = await _printRawBitmapInStrips(
         commandType: commandType,
         image: layers.redLayer,
@@ -836,37 +853,62 @@ Future<void> printBluetoothReceipt({
       generator: generator,
     );
 
-    for (var i = 0; i < textChunks.length; i++) {
-      final image = await generateSimpleTextImage(
-        textChunks[i],
-        paperWidth,
-        addBorder: textBorder,
-        printerProfile: printerProfile,
-        printColor: normalizedPrintColor,
-        fontSize: textFontSize.toDouble(),
-        fontFamily: textFontFamily,
+    Future<bool> printTextChunksForPass(String dualColorPass) async {
+      for (var i = 0; i < textChunks.length; i++) {
+        final image = await generateSimpleTextImage(
+          textChunks[i],
+          paperWidth,
+          addBorder: textBorder,
+          printerProfile: printerProfile,
+          printColor: normalizedPrintColor,
+          fontSize: textFontSize.toDouble(),
+          fontFamily: textFontFamily,
+        );
+        final sentChunk = await _printImageByCommandType(
+          commandType: effectiveCommandType,
+          image: image,
+          paperWidthMm: paperWidth,
+          fitMode: fitMode,
+          contentAlignment: contentAlignment,
+          printerProfile: printerProfile,
+          printColor: normalizedPrintColor,
+          printRotationDegrees: printRotationDegrees,
+          generator: generator,
+          dualColorPass: dualColorPass,
+        );
+        if (!sentChunk) {
+          return false;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 160));
+      }
+      return true;
+    }
+
+    final isDualColorJob = normalizedPrintColor == 'black_red';
+    final sentText = isDualColorJob
+        ? await printTextChunksForPass(_dualColorPassBlack)
+        : await printTextChunksForPass(_dualColorPassAuto);
+    if (!sentText) {
+      await PrintBluetoothThermal.disconnect;
+      if (!context.mounted) return;
+      _showMessage(
+        context,
+        'فشل إرسال جزء من النص للطابعة. تأكد من وجود ورق وإغلاق الغطاء جيدًا.',
       );
-      final sentChunk = await _printImageByCommandType(
-        commandType: effectiveCommandType,
-        image: image,
-        paperWidthMm: paperWidth,
-        fitMode: fitMode,
-        contentAlignment: contentAlignment,
-        printerProfile: printerProfile,
-        printColor: normalizedPrintColor,
-        printRotationDegrees: printRotationDegrees,
-        generator: generator,
-      );
-      if (!sentChunk) {
+      return;
+    }
+    if (isDualColorJob) {
+      await Future<void>.delayed(const Duration(milliseconds: 180));
+      final sentRedText = await printTextChunksForPass(_dualColorPassRed);
+      if (!sentRedText) {
         await PrintBluetoothThermal.disconnect;
         if (!context.mounted) return;
         _showMessage(
           context,
-          'فشل إرسال جزء من النص للطابعة. تأكد من وجود ورق وإغلاق الغطاء جيدًا.',
+          'فشل إرسال الجزء الأحمر من النص للطابعة. تأكد من وجود ورق وإغلاق الغطاء جيدًا.',
         );
         return;
       }
-      await Future<void>.delayed(const Duration(milliseconds: 160));
     }
 
     if (feedLines > 0) {
@@ -961,7 +1003,8 @@ Future<void> printBluetoothPdfReceipt({
     final profile = await CapabilityProfile.load();
     final generator = Generator(paperSize, profile);
 
-    document = await PdfDocument.openFile(pdfPath);
+    final pdfDocument = await PdfDocument.openFile(pdfPath);
+    document = pdfDocument;
 
     await PrintBluetoothThermal.disconnect;
     await requestBluetoothPermissions();
@@ -995,53 +1038,82 @@ Future<void> printBluetoothPdfReceipt({
       generator: generator,
     );
 
-    for (var pageNumber = 1; pageNumber <= document.pagesCount; pageNumber++) {
-      final page = await document.getPage(pageNumber);
-      try {
-        final renderWidth = _isFitToWidthMode(fitMode)
-            ? (rasterTargetWidth * 4).toDouble()
-            : page.width.toDouble().clamp(300.0, 2400.0);
-        final safePageWidth = page.width <= 0 ? 1.0 : page.width.toDouble();
-        final safePageHeight = page.height.toDouble();
-        final dynamicHeight = ((renderWidth * safePageHeight) / safePageWidth)
-            .clamp(300.0, 5000.0);
+    Future<bool> printPdfPagesForPass(String dualColorPass) async {
+      for (
+        var pageNumber = 1;
+        pageNumber <= pdfDocument.pagesCount;
+        pageNumber++
+      ) {
+        final page = await pdfDocument.getPage(pageNumber);
+        try {
+          final renderWidth = _isFitToWidthMode(fitMode)
+              ? (rasterTargetWidth * 4).toDouble()
+              : page.width.toDouble().clamp(300.0, 2400.0);
+          final safePageWidth = page.width <= 0 ? 1.0 : page.width.toDouble();
+          final safePageHeight = page.height.toDouble();
+          final dynamicHeight = ((renderWidth * safePageHeight) / safePageWidth)
+              .clamp(300.0, 5000.0);
 
-        final pageImage = await page.render(
-          width: renderWidth,
-          height: dynamicHeight,
-          format: PdfPageImageFormat.png,
-          backgroundColor: '#FFFFFF',
-        );
-
-        if (pageImage == null) {
-          continue;
-        }
-
-        final uiImage = await _decodeUiImage(pageImage.bytes);
-        final sentPage = await _printImageByCommandType(
-          commandType: effectiveCommandType,
-          image: uiImage,
-          paperWidthMm: paperWidth,
-          fitMode: fitMode,
-          contentAlignment: contentAlignment,
-          printerProfile: printerProfile,
-          printColor: normalizedPrintColor,
-          printRotationDegrees: printRotationDegrees,
-          generator: generator,
-        );
-        if (!sentPage) {
-          await PrintBluetoothThermal.disconnect;
-          if (!context.mounted) return;
-          _showMessage(
-            context,
-            'فشل إرسال الصفحة $pageNumber للطابعة. تأكد من وجود ورق وإغلاق الغطاء جيدًا.',
+          final pageImage = await page.render(
+            width: renderWidth,
+            height: dynamicHeight,
+            format: PdfPageImageFormat.png,
+            backgroundColor: '#FFFFFF',
           );
-          return;
-        }
 
-        await Future<void>.delayed(const Duration(milliseconds: 120));
-      } finally {
-        await page.close();
+          if (pageImage == null) {
+            continue;
+          }
+
+          final uiImage = await _decodeUiImage(pageImage.bytes);
+          final sentPage = await _printImageByCommandType(
+            commandType: effectiveCommandType,
+            image: uiImage,
+            paperWidthMm: paperWidth,
+            fitMode: fitMode,
+            contentAlignment: contentAlignment,
+            printerProfile: printerProfile,
+            printColor: normalizedPrintColor,
+            printRotationDegrees: printRotationDegrees,
+            generator: generator,
+            dualColorPass: dualColorPass,
+          );
+          if (!sentPage) {
+            return false;
+          }
+
+          await Future<void>.delayed(const Duration(milliseconds: 120));
+        } finally {
+          await page.close();
+        }
+      }
+      return true;
+    }
+
+    final isDualColorJob = normalizedPrintColor == 'black_red';
+    final sentPdf = isDualColorJob
+        ? await printPdfPagesForPass(_dualColorPassBlack)
+        : await printPdfPagesForPass(_dualColorPassAuto);
+    if (!sentPdf) {
+      await PrintBluetoothThermal.disconnect;
+      if (!context.mounted) return;
+      _showMessage(
+        context,
+        'فشل إرسال صفحة للطابعة. تأكد من وجود ورق وإغلاق الغطاء جيدًا.',
+      );
+      return;
+    }
+    if (isDualColorJob) {
+      await Future<void>.delayed(const Duration(milliseconds: 180));
+      final sentRedPdf = await printPdfPagesForPass(_dualColorPassRed);
+      if (!sentRedPdf) {
+        await PrintBluetoothThermal.disconnect;
+        if (!context.mounted) return;
+        _showMessage(
+          context,
+          'فشل إرسال الجزء الأحمر من الصفحات للطابعة. تأكد من وجود ورق وإغلاق الغطاء جيدًا.',
+        );
+        return;
       }
     }
 
