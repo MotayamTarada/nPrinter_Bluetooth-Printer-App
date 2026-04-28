@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../screens/bluetooth_devices_scan_page.dart';
@@ -106,6 +107,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   final customPaperWidthController = TextEditingController(
     text: _defaultCustomPaperWidth,
   );
+  final customPaperWidthFocusNode = FocusNode();
   final textFocusNode = FocusNode();
   SharedPreferences? _prefs;
   bool _isRestoringPreferences = false;
@@ -135,6 +137,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     macController.dispose();
     textController.dispose();
     customPaperWidthController.dispose();
+    customPaperWidthFocusNode.dispose();
     textFocusNode.dispose();
     super.dispose();
   }
@@ -242,7 +245,11 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   }
 
   String _validatedPrintColor(String value) {
-    return _allowedPrintColors.contains(value) ? value : 'black';
+    final normalized = value.trim().toLowerCase();
+    if (normalized == '1' || normalized == '49' || normalized == 'n=1') {
+      return 'red';
+    }
+    return _allowedPrintColors.contains(normalized) ? normalized : 'black';
   }
 
   String _validatedPrintRotation(String value) {
@@ -1051,14 +1058,28 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
               }
               paperWidth = value;
             });
+            if (value == _customPaperWidthValue) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) {
+                  return;
+                }
+                customPaperWidthFocusNode.requestFocus();
+              });
+            } else {
+              customPaperWidthFocusNode.unfocus();
+            }
           },
         ),
         if (paperWidth == _customPaperWidthValue) ...[
           const SizedBox(height: 8),
           TextFormField(
             controller: customPaperWidthController,
+            focusNode: customPaperWidthFocusNode,
             textDirection: TextDirection.ltr,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            inputFormatters: <TextInputFormatter>[
+              FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+            ],
             decoration: _dropdownFieldDecoration().copyWith(
               labelText: 'عرض مخصص mm',
               hintText: 'مثال 100',

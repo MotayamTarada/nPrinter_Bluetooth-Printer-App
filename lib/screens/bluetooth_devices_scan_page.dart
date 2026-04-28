@@ -71,6 +71,9 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
       RegExp(r'[\s_-]+'),
       '',
     );
+    if (normalized.contains('FK99PLUS')) {
+      return false;
+    }
     return normalized.contains('NPRINTER') ||
         normalized.contains('FK99') ||
         normalized.contains('B300') ||
@@ -80,6 +83,9 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
 
   bool _isPrinterDeviceName(String name) {
     final normalized = name.trim().toLowerCase();
+    if (normalized.contains('fk99plus')) {
+      return false;
+    }
     return normalized.contains('printer') ||
         normalized.contains('fk99') ||
         _isNPrinterModelName(name);
@@ -224,6 +230,15 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
       if (bluetooth.isGranted || bluetooth.isLimited) {
         return true;
       }
+      if ((bluetooth.isPermanentlyDenied || bluetooth.isRestricted) &&
+          mounted) {
+        await _showOpenSettingsDialog(
+          title: 'Bluetooth Permission',
+          message:
+              'Bluetooth access is blocked on this iPhone. Please allow it from Settings, then return to the app.',
+        );
+        return false;
+      }
       if (mounted) {
         final continueRequest = await _showPermissionRationaleDialog(
           title: 'صلاحية البلوتوث',
@@ -235,7 +250,7 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
         }
       }
       final requested = await Permission.bluetooth.request();
-      if (requested.isPermanentlyDenied && mounted) {
+      if (!requested.isGranted && !requested.isLimited && mounted) {
         await _showOpenSettingsDialog(
           title: 'صلاحية مرفوضة',
           message:

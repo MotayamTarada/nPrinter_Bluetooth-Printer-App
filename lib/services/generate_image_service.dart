@@ -115,12 +115,10 @@ Future<ui.Image> generateSimpleTextImage(
   final printFont = _resolvePrintFont(fontFamily);
   await _ensurePrintFontLoaded(printFont);
 
-  final normalizedPrintColor = printColor.trim().toLowerCase();
-  // In dual-color mode (black_red), keep generated text black by default.
-  // Red layer is intended for source content that is actually red (e.g. PDF/image).
-  final textPaintColor = normalizedPrintColor == 'red'
-      ? Colors.red
-      : Colors.black;
+  // Keep typed text rasterized as pure black pixels.
+  // Printer-side color command (ESC r) decides black/red output.
+  // This avoids anti-aliased red shades that can appear as mixed colors.
+  const textPaintColor = Colors.black;
 
   final textStyle = TextStyle(
     fontFamily: printFont.family,

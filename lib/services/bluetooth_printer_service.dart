@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 import 'package:pdfx/pdfx.dart';
@@ -14,16 +14,52 @@ import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 import 'generate_image_service.dart';
 import 'printer_status_service.dart';
 
-Future<void> requestBluetoothPermissions() async {
-  if (await Permission.bluetoothConnect.isDenied) {
-    await Permission.bluetoothConnect.request();
+Future<bool> requestBluetoothPermissions() async {
+  if (kIsWeb) {
+    return true;
   }
-  if (await Permission.bluetoothScan.isDenied) {
-    await Permission.bluetoothScan.request();
+
+  if (defaultTargetPlatform == TargetPlatform.iOS) {
+    final bluetoothStatus = await Permission.bluetooth.status;
+    if (bluetoothStatus.isGranted || bluetoothStatus.isLimited) {
+      return true;
+    }
+
+    final requestedStatus = await Permission.bluetooth.request();
+    return requestedStatus.isGranted || requestedStatus.isLimited;
   }
-  if (await Permission.location.isDenied) {
-    await Permission.location.request();
+
+  if (defaultTargetPlatform != TargetPlatform.android) {
+    return true;
   }
+
+  final requiredPermissions = <Permission>[
+    Permission.bluetoothConnect,
+    Permission.bluetoothScan,
+    Permission.locationWhenInUse,
+  ];
+
+  var alreadyGranted = true;
+  for (final permission in requiredPermissions) {
+    final status = await permission.status;
+    if (!status.isGranted && !status.isLimited) {
+      alreadyGranted = false;
+      break;
+    }
+  }
+  if (alreadyGranted) {
+    return true;
+  }
+
+  final requestedPermissions = await requiredPermissions.request();
+  for (final permission in requiredPermissions) {
+    final status = requestedPermissions[permission] ?? await permission.status;
+    if (!status.isGranted && !status.isLimited) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 PaperSize _resolvePaperSize(double paperWidthMm) {
@@ -62,7 +98,8 @@ bool _isEscCommandType(String commandType) {
 }
 
 bool _isColorMode(String printColor) {
-  return printColor == 'red' || printColor == 'black_red';
+  final normalized = _normalizePrintColor(printColor);
+  return normalized == 'red' || normalized == 'black_red';
 }
 
 const String _dualColorPassAuto = 'auto';
@@ -111,8 +148,14 @@ String _normalizeCommandType(String commandType) {
 
 String _normalizePrintColor(String printColor) {
   final normalized = printColor.trim().toLowerCase();
-  if (normalized == 'red' || normalized == 'black_red') {
-    return normalized;
+  if (normalized == 'black_red') {
+    return 'black_red';
+  }
+  if (normalized == 'red' ||
+      normalized == '1' ||
+      normalized == '49' ||
+      normalized == 'n=1') {
+    return 'red';
   }
   return 'black';
 }
@@ -137,9 +180,19 @@ img.Image _applyPrintRotation(img.Image source, int rotationDegrees) {
 }
 
 List<int> _buildPrintColorBytes(String printColor) {
-  // ESC r n : Select color (common two-color ESC/POS printers)
-  // n=0 black, n=1 red
-  return <int>[0x1B, 0x72, printColor == 'red' ? 1 : 0];
+  final normalized = _normalizePrintColor(printColor);
+  final n = normalized == 'red' ? 1 : 0;
+
+  // ESC r n : two-color selection.
+  // Standard ESC/POS mapping:
+  //   n=0 -> black
+  //   n=1 -> red
+  // Also force reverse mode OFF before setting color to avoid white-on-color
+  // artifacts if the printer state was changed by previous jobs/tools.
+  return <int>[
+    0x1D, 0x42, 0x00, // GS B 0: reverse off
+    0x1B, 0x72, n, // ESC r n
+  ];
 }
 
 int _resolveRasterTargetWidth(
@@ -333,11 +386,24 @@ class _DualColorLayers {
   final bool hasRedPixels;
 }
 
-bool _isRedCandidate(img.Pixel pixel) {
-  final r = pixel.r.toInt();
-  final g = pixel.g.toInt();
-  final b = pixel.b.toInt();
-  return r >= 110 && r > g + 20 && r > b + 20;
+int _pixelLuminance(int r, int g, int b) {
+  return ((r * 299) + (g * 587) + (b * 114)) ~/ 1000;
+}
+
+bool _isStrongRedCandidate(int r, int g, int b) {
+  final strongestNonRed = math.max(g, b);
+  final redDominance = r - strongestNonRed;
+  final channelSpread =
+      math.max(r, strongestNonRed) - math.min(r, math.min(g, b));
+  return r >= 120 && redDominance >= 34 && channelSpread >= 44;
+}
+
+bool _isReddishEdgeCandidate(int r, int g, int b) {
+  final strongestNonRed = math.max(g, b);
+  final redDominance = r - strongestNonRed;
+  final channelSpread =
+      math.max(r, strongestNonRed) - math.min(r, math.min(g, b));
+  return r >= 95 && redDominance >= 16 && channelSpread >= 24;
 }
 
 _DualColorLayers _splitDualColorLayers(img.Image source) {
@@ -364,17 +430,28 @@ _DualColorLayers _splitDualColorLayers(img.Image source) {
         continue;
       }
 
-      if (_isRedCandidate(pixel)) {
+      final r = pixel.r.toInt();
+      final g = pixel.g.toInt();
+      final b = pixel.b.toInt();
+      final luminance = _pixelLuminance(r, g, b);
+
+      // Keep only strong, intentional red pixels in the red layer.
+      if (_isStrongRedCandidate(r, g, b)) {
         hasRedPixels = true;
         redLayer.setPixelRgba(x, y, 0, 0, 0, 255);
         continue;
       }
 
-      final luminance =
-          ((pixel.r.toInt() * 299) +
-              (pixel.g.toInt() * 587) +
-              (pixel.b.toInt() * 114)) ~/
-          1000;
+      // Anti-aliased red/pink edges should not be interpreted as black.
+      // If a pixel is slightly reddish but bright, keep it white.
+      if (_isReddishEdgeCandidate(r, g, b)) {
+        if (luminance < 90) {
+          hasRedPixels = true;
+          redLayer.setPixelRgba(x, y, 0, 0, 0, 255);
+        }
+        continue;
+      }
+
       if (luminance < 168) {
         hasBlackPixels = true;
         blackLayer.setPixelRgba(x, y, 0, 0, 0, 255);
@@ -414,14 +491,17 @@ int _resolveHorizontalOffset({
   }
 }
 
-Uint8List _toMonochromeBitmapData(img.Image source) {
+Uint8List _toMonochromeBitmapData(
+  img.Image source, {
+  bool blackPixelAsZero = false,
+}) {
   final widthBytes = (source.width + 7) ~/ 8;
   final data = Uint8List(widthBytes * source.height);
   var offset = 0;
 
   for (var y = 0; y < source.height; y++) {
     for (var xByte = 0; xByte < widthBytes; xByte++) {
-      var value = 0;
+      var value = blackPixelAsZero ? 0xFF : 0x00;
       for (var bit = 0; bit < 8; bit++) {
         final x = (xByte * 8) + bit;
         if (x >= source.width) {
@@ -440,7 +520,11 @@ Uint8List _toMonochromeBitmapData(img.Image source) {
                 (pixel.b.toInt() * 114)) ~/
             1000;
         if (luminance < 160) {
-          value |= (0x80 >> bit);
+          if (blackPixelAsZero) {
+            value &= ~(0x80 >> bit);
+          } else {
+            value |= (0x80 >> bit);
+          }
         }
       }
       data[offset++] = value;
@@ -455,6 +539,7 @@ List<int> _buildTsplBitmapJob({
   required double paperWidthMm,
   required int paperWidthDots,
   required String alignment,
+  int? density,
 }) {
   final output = <int>[];
   final widthBytes = (image.width + 7) ~/ 8;
@@ -465,10 +550,15 @@ List<int> _buildTsplBitmapJob({
   );
   final sizeWidthMm = math.max(20, math.min(220, paperWidthMm.round()));
   final heightMm = math.max(10, (image.height / 8).ceil() + 4);
-  final bitmapData = _toMonochromeBitmapData(image);
+  // TSPL BITMAP expects black dots as 0-bits and white as 1-bits.
+  final bitmapData = _toMonochromeBitmapData(image, blackPixelAsZero: true);
+  final safeDensity = density?.clamp(0, 15).toInt();
 
   _appendAsciiLine(output, 'SIZE $sizeWidthMm mm,$heightMm mm');
   _appendAsciiLine(output, 'GAP 0 mm,0 mm');
+  if (safeDensity != null) {
+    _appendAsciiLine(output, 'DENSITY $safeDensity');
+  }
   _appendAsciiLine(output, 'DIRECTION 1');
   _appendAsciiLine(output, 'REFERENCE 0,0');
   _appendAsciiLine(output, 'CLS');
@@ -511,6 +601,7 @@ List<int> _buildRawBitmapJob({
   required double paperWidthMm,
   required int paperWidthDots,
   required String alignment,
+  int? tsplDensity,
 }) {
   if (commandType == 'tspl') {
     return _buildTsplBitmapJob(
@@ -518,6 +609,7 @@ List<int> _buildRawBitmapJob({
       paperWidthMm: paperWidthMm,
       paperWidthDots: paperWidthDots,
       alignment: alignment,
+      density: tsplDensity,
     );
   }
   if (commandType == 'cpcl') {
@@ -552,6 +644,7 @@ Future<bool> _printRawBitmapInStrips({
   required double paperWidthMm,
   required int paperWidthDots,
   required String alignment,
+  int? tsplDensity,
 }) async {
   for (final strip in _splitImageIntoStrips(image, maxStripHeight: 240)) {
     final bytes = _buildRawBitmapJob(
@@ -560,6 +653,7 @@ Future<bool> _printRawBitmapInStrips({
       paperWidthMm: paperWidthMm,
       paperWidthDots: paperWidthDots,
       alignment: alignment,
+      tsplDensity: tsplDensity,
     );
     final sent = await PrintBluetoothThermal.writeBytes(bytes);
     if (!sent) {
@@ -574,6 +668,7 @@ Future<img.Image> _prepareImageForCommand(
   ui.Image flutterImage,
   double paperWidthMm, {
   bool forceFitToPaperWidth = false,
+  bool preferSharpResize = false,
   String printerProfile = 'auto',
   int printRotationDegrees = 0,
 }) async {
@@ -595,16 +690,47 @@ Future<img.Image> _prepareImageForCommand(
     paperWidthMm,
     printerProfile: printerProfile,
   );
-  final mustResizeToPaperWidth =
-      forceFitToPaperWidth || rotatedImage.width > rasterTargetWidth;
+  final mustResizeToPaperWidth = forceFitToPaperWidth
+      ? rotatedImage.width != rasterTargetWidth
+      : rotatedImage.width > rasterTargetWidth;
 
   return mustResizeToPaperWidth
       ? img.copyResize(
           rotatedImage,
           width: rasterTargetWidth,
-          interpolation: img.Interpolation.average,
+          interpolation: preferSharpResize
+              ? img.Interpolation.nearest
+              : img.Interpolation.average,
         )
       : rotatedImage;
+}
+
+img.Image _toBilevelImage(img.Image source, {int threshold = 168}) {
+  final output = img.Image(
+    width: source.width,
+    height: source.height,
+    numChannels: 4,
+  );
+  img.fill(output, color: img.ColorRgba8(255, 255, 255, 255));
+
+  for (var y = 0; y < source.height; y++) {
+    for (var x = 0; x < source.width; x++) {
+      final pixel = source.getPixel(x, y);
+      if (pixel.a.toInt() <= 8) {
+        continue;
+      }
+      final luminance = _pixelLuminance(
+        pixel.r.toInt(),
+        pixel.g.toInt(),
+        pixel.b.toInt(),
+      );
+      if (luminance < threshold) {
+        output.setPixelRgba(x, y, 0, 0, 0, 255);
+      }
+    }
+  }
+
+  return output;
 }
 
 Future<List<int>> _convertPreparedImageToEscPosBytes(
@@ -653,14 +779,20 @@ Future<bool> _printImageByCommandType({
   required int printRotationDegrees,
   required Generator generator,
   String dualColorPass = _dualColorPassAuto,
+  bool forceBilevel = false,
+  int? tsplDensity,
 }) async {
   final preparedImage = await _prepareImageForCommand(
     image,
     paperWidthMm,
     forceFitToPaperWidth: _isFitToWidthMode(fitMode),
+    preferSharpResize: forceBilevel,
     printerProfile: printerProfile,
     printRotationDegrees: printRotationDegrees,
   );
+  final imageForPrint = forceBilevel
+      ? _toBilevelImage(preparedImage)
+      : preparedImage;
   if (_isEscCommandType(commandType)) {
     final align = _resolvePrintAlignment(contentAlignment);
 
@@ -712,7 +844,7 @@ Future<bool> _printImageByCommandType({
     }
 
     final imageBytes = await _convertPreparedImageToEscPosBytes(
-      preparedImage,
+      imageForPrint,
       paperWidthMm,
       align: align,
     );
@@ -744,6 +876,7 @@ Future<bool> _printImageByCommandType({
         paperWidthMm: paperWidthMm,
         paperWidthDots: paperWidthDots,
         alignment: contentAlignment,
+        tsplDensity: tsplDensity,
       );
       if (!sentBlack) {
         return false;
@@ -757,6 +890,7 @@ Future<bool> _printImageByCommandType({
         paperWidthMm: paperWidthMm,
         paperWidthDots: paperWidthDots,
         alignment: contentAlignment,
+        tsplDensity: tsplDensity,
       );
       if (!sentRed) {
         return false;
@@ -767,10 +901,11 @@ Future<bool> _printImageByCommandType({
 
   return _printRawBitmapInStrips(
     commandType: commandType,
-    image: preparedImage,
+    image: imageForPrint,
     paperWidthMm: paperWidthMm,
     paperWidthDots: paperWidthDots,
     alignment: contentAlignment,
+    tsplDensity: tsplDensity,
   );
 }
 
@@ -823,7 +958,15 @@ Future<void> printBluetoothReceipt({
     final textChunks = _splitTextIntoChunks(text);
 
     await PrintBluetoothThermal.disconnect;
-    await requestBluetoothPermissions();
+    final hasBluetoothPermissions = await requestBluetoothPermissions();
+    if (!hasBluetoothPermissions) {
+      if (!context.mounted) return;
+      _showMessage(
+        context,
+        'Bluetooth permission is required before printing. On iPhone, if you denied it once, enable it from Settings.',
+      );
+      return;
+    }
 
     final prePrintStatus = await _checkEscPosPrinterStatus(
       mac: mac,
@@ -875,6 +1018,7 @@ Future<void> printBluetoothReceipt({
           printRotationDegrees: printRotationDegrees,
           generator: generator,
           dualColorPass: dualColorPass,
+          forceBilevel: true,
         );
         if (!sentChunk) {
           return false;
@@ -1007,7 +1151,15 @@ Future<void> printBluetoothPdfReceipt({
     document = pdfDocument;
 
     await PrintBluetoothThermal.disconnect;
-    await requestBluetoothPermissions();
+    final hasBluetoothPermissions = await requestBluetoothPermissions();
+    if (!hasBluetoothPermissions) {
+      if (!context.mounted) return;
+      _showMessage(
+        context,
+        'Bluetooth permission is required before printing. On iPhone, if you denied it once, enable it from Settings.',
+      );
+      return;
+    }
 
     final prePrintStatus = await _checkEscPosPrinterStatus(
       mac: mac,
