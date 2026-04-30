@@ -21,6 +21,7 @@ dependencies:
   file_picker: ^8.0.7
   pdfx: ^2.6.0
   shared_preferences: ^2.5.3
+  charset_converter: ^2.3.0
 
 dev_dependencies:
   flutter_test:

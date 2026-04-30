@@ -13,8 +13,10 @@ import 'package:nprinter_bluetooth_only/main.dart';
 void main() {
   testWidgets('App renders printer screen', (WidgetTester tester) async {
     await tester.pumpWidget(const NPrinterBluetoothOnlyApp());
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
 
-    expect(find.text('Bluetooth Printer'), findsOneWidget);
+    expect(find.text('نص الطباعة'), findsOneWidget);
     expect(find.byIcon(Icons.print), findsOneWidget);
   });
 }

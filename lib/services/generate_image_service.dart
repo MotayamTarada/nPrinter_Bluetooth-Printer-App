@@ -3,6 +3,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'esc_pos_colored_text_service.dart';
+
 class _PrintFontConfig {
   const _PrintFontConfig({
     required this.family,
@@ -135,6 +137,132 @@ Future<ui.Image> generateSimpleTextImage(
 
   final height = tp.height + 2 * padding;
 
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, width, height));
+
+  canvas.drawRect(
+    Rect.fromLTWH(0, 0, width, height),
+    Paint()..color = Colors.white,
+  );
+
+  if (addBorder) {
+    final borderPaint = Paint()
+      ..color = Colors.black
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
+    canvas.drawRect(Rect.fromLTWH(0, 0, width, height), borderPaint);
+  }
+
+  final textX = padding + (width - 2 * padding - tp.width) / 2;
+  const textY = padding;
+  tp.paint(canvas, Offset(textX, textY));
+
+  final picture = recorder.endRecording();
+  return picture.toImage(width.toInt(), height.toInt());
+}
+
+Future<ui.Image> generateTaggedTextImage(
+  List<PrintPart> parts,
+  double paperWidth, {
+  bool addBorder = true,
+  String printerProfile = 'auto',
+  double fontSize = 26,
+  String fontFamily = 'NotoKufiArabicBold',
+}) async {
+  final width = _paperPixelWidth(paperWidth, printerProfile: printerProfile);
+  const padding = 20.0;
+
+  final printFont = _resolvePrintFont(fontFamily);
+  await _ensurePrintFontLoaded(printFont);
+
+  final baseStyle = TextStyle(
+    fontFamily: printFont.family,
+    fontSize: fontSize.clamp(12, 72).toDouble(),
+    color: Colors.black,
+    fontWeight: printFont.weight,
+  );
+
+  final spans = <InlineSpan>[
+    for (final part in parts)
+      TextSpan(
+        text: part.text,
+        style: baseStyle.copyWith(
+          color: part.red ? const Color(0xFFD10000) : Colors.black,
+        ),
+      ),
+  ];
+  final tp = TextPainter(
+    text: TextSpan(style: baseStyle, children: spans),
+    textDirection: TextDirection.rtl,
+    textAlign: TextAlign.center,
+  )..layout(maxWidth: width - 2 * padding);
+
+  final height = tp.height + 2 * padding;
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, width, height));
+
+  canvas.drawRect(
+    Rect.fromLTWH(0, 0, width, height),
+    Paint()..color = Colors.white,
+  );
+
+  if (addBorder) {
+    final borderPaint = Paint()
+      ..color = Colors.black
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
+    canvas.drawRect(Rect.fromLTWH(0, 0, width, height), borderPaint);
+  }
+
+  final textX = padding + (width - 2 * padding - tp.width) / 2;
+  const textY = padding;
+  tp.paint(canvas, Offset(textX, textY));
+
+  final picture = recorder.endRecording();
+  return picture.toImage(width.toInt(), height.toInt());
+}
+
+Future<ui.Image> generateTaggedTextLayerImage(
+  List<PrintPart> parts,
+  double paperWidth, {
+  required bool redLayer,
+  bool addBorder = true,
+  String printerProfile = 'auto',
+  double fontSize = 26,
+  String fontFamily = 'NotoKufiArabicBold',
+}) async {
+  final width = _paperPixelWidth(paperWidth, printerProfile: printerProfile);
+  const padding = 20.0;
+
+  final printFont = _resolvePrintFont(fontFamily);
+  await _ensurePrintFontLoaded(printFont);
+
+  final baseStyle = TextStyle(
+    fontFamily: printFont.family,
+    fontSize: fontSize.clamp(12, 72).toDouble(),
+    color: Colors.black,
+    fontWeight: printFont.weight,
+  );
+
+  final spans = <InlineSpan>[
+    for (final part in parts)
+      TextSpan(
+        text: part.text,
+        style: baseStyle.copyWith(
+          // Keep full original text in layout, but paint only target layer.
+          color: ((redLayer && part.red) || (!redLayer && !part.red))
+              ? Colors.black
+              : Colors.white,
+        ),
+      ),
+  ];
+  final tp = TextPainter(
+    text: TextSpan(style: baseStyle, children: spans),
+    textDirection: TextDirection.rtl,
+    textAlign: TextAlign.center,
+  )..layout(maxWidth: width - 2 * padding);
+
+  final height = tp.height + 2 * padding;
   final recorder = ui.PictureRecorder();
   final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, width, height));
 

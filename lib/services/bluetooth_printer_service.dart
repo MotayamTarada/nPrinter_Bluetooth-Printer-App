@@ -6,11 +6,14 @@ import 'dart:ui' as ui;
 import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 import 'package:pdfx/pdfx.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'esc_pos_colored_text_service.dart';
 import 'generate_image_service.dart';
 import 'printer_status_service.dart';
 
@@ -102,9 +105,340 @@ bool _isColorMode(String printColor) {
   return normalized == 'red' || normalized == 'black_red';
 }
 
+enum PrinterModelProfile { gainschaB380 }
+
+class PrinterColorProfile {
+  const PrinterColorProfile({
+    required this.name,
+    required this.redCommands,
+    required this.supportsRasterColorAttempt,
+  });
+
+  final String name;
+  final List<List<int>> redCommands;
+  final bool supportsRasterColorAttempt;
+}
+
 const String _dualColorPassAuto = 'auto';
 const String _dualColorPassBlack = 'black';
 const String _dualColorPassRed = 'red';
+const String _printerLibraryName = 'print_bluetooth_thermal';
+const String _workingWriteMethodName = 'PrintBluetoothThermal.writeBytes';
+const String _messagePrintSuccess = 'تمت الطباعة بنجاح';
+const String _messageTextRequired = 'الرجاء إدخال نص للطباعة';
+const String _messageConnectionFailed = 'تعذر الاتصال بالطابعة';
+const String _selectedRedCommandIndexKey = 'printer.selectedRedCommandIndex';
+
+const PrinterColorProfile b380ColorProfile = PrinterColorProfile(
+  name: 'Gainscha B380 / nPrinter',
+  redCommands: <List<int>>[
+    <int>[0x1B, 0x72, 0x01],
+    <int>[0x1B, 0x63, 0x30, 0x01],
+    <int>[0x1B, 0x72, 0x31],
+  ],
+  supportsRasterColorAttempt: true,
+);
+
+const PrinterModelProfile _activePrinterProfile =
+    PrinterModelProfile.gainschaB380;
+
+PrinterColorProfile getActivePrinterColorProfile({
+  PrinterModelProfile profile = _activePrinterProfile,
+}) {
+  switch (profile) {
+    case PrinterModelProfile.gainschaB380:
+      return b380ColorProfile;
+  }
+}
+
+List<List<int>> get _activeRedCommands {
+  return getActivePrinterColorProfile().redCommands;
+}
+
+enum PrinterColorSupport {
+  blackOnly,
+  gainschaB380OfficialSdk,
+  escPosBestEffort,
+}
+
+abstract class ColorPrintEngine {
+  Future<bool> printMonochromeImageBlack(img.Image image);
+
+  Future<bool> printMonochromeImageRed(img.Image image);
+
+  Future<bool> printMonochromeLayersBlackRed({
+    required img.Image blackLayer,
+    required img.Image redLayer,
+  });
+}
+
+typedef BlackPrintCallback = Future<bool> Function(img.Image image);
+typedef RedPrintWithCommandCallback =
+    Future<bool> Function(img.Image image, List<int> redCommand);
+
+class BlackOnlyEngine implements ColorPrintEngine {
+  BlackOnlyEngine({required BlackPrintCallback printBlack})
+    : _printBlack = printBlack;
+
+  final BlackPrintCallback _printBlack;
+
+  @override
+  Future<bool> printMonochromeImageBlack(img.Image image) {
+    return _printBlack(image);
+  }
+
+  @override
+  Future<bool> printMonochromeImageRed(img.Image image) async {
+    return false;
+  }
+
+  @override
+  Future<bool> printMonochromeLayersBlackRed({
+    required img.Image blackLayer,
+    required img.Image redLayer,
+  }) async {
+    if (!_hasInkPixels(blackLayer)) {
+      return false;
+    }
+    return _printBlack(blackLayer);
+  }
+}
+
+class EscPosBestEffortEngine implements ColorPrintEngine {
+  EscPosBestEffortEngine({
+    required BlackPrintCallback printBlack,
+    required RedPrintWithCommandCallback printRedWithCommand,
+    required List<List<int>> redCommands,
+    required Future<void> Function(int index) onRedCommandSelected,
+  }) : _printBlack = printBlack,
+       _printRedWithCommand = printRedWithCommand,
+       _redCommands = redCommands,
+       _onRedCommandSelected = onRedCommandSelected;
+
+  final BlackPrintCallback _printBlack;
+  final RedPrintWithCommandCallback _printRedWithCommand;
+  final List<List<int>> _redCommands;
+  final Future<void> Function(int index) _onRedCommandSelected;
+
+  @override
+  Future<bool> printMonochromeImageBlack(img.Image image) {
+    return _printBlack(image);
+  }
+
+  @override
+  Future<bool> printMonochromeImageRed(img.Image image) async {
+    if (!_hasInkPixels(image)) {
+      return false;
+    }
+    for (final index in await _redCommandTryOrder()) {
+      final ok = await _printRedWithCommand(image, _redCommands[index]);
+      if (ok) {
+        await _onRedCommandSelected(index);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  @override
+  Future<bool> printMonochromeLayersBlackRed({
+    required img.Image blackLayer,
+    required img.Image redLayer,
+  }) async {
+    final hasBlack = _hasInkPixels(blackLayer);
+    final hasRed = _hasInkPixels(redLayer);
+    if (!hasBlack && !hasRed) {
+      return false;
+    }
+
+    if (hasBlack) {
+      final blackOk = await _printBlack(blackLayer);
+      if (!blackOk) {
+        return false;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+    }
+
+    if (!hasRed) {
+      return true;
+    }
+
+    for (final index in await _redCommandTryOrder()) {
+      final redOk = await _printRedWithCommand(redLayer, _redCommands[index]);
+      if (!redOk) {
+        continue;
+      }
+      await _onRedCommandSelected(index);
+      return true;
+    }
+
+    return false;
+  }
+}
+
+class GainschaB380OfficialEngine implements ColorPrintEngine {
+  GainschaB380OfficialEngine({
+    required this.mac,
+    required this.fallbackEscPosEngine,
+  });
+
+  final String mac;
+  final EscPosBestEffortEngine fallbackEscPosEngine;
+
+  @override
+  Future<bool> printMonochromeImageBlack(img.Image image) {
+    return fallbackEscPosEngine.printMonochromeImageBlack(image);
+  }
+
+  @override
+  Future<bool> printMonochromeImageRed(img.Image image) async {
+    final officialOk = await _tryPrintViaOfficialSdk(
+      mac: mac,
+      image: image,
+      printRed: true,
+    );
+    if (officialOk) {
+      return true;
+    }
+    return fallbackEscPosEngine.printMonochromeImageRed(image);
+  }
+
+  @override
+  Future<bool> printMonochromeLayersBlackRed({
+    required img.Image blackLayer,
+    required img.Image redLayer,
+  }) async {
+    if (!_hasInkPixels(blackLayer) && !_hasInkPixels(redLayer)) {
+      return false;
+    }
+
+    if (_hasInkPixels(blackLayer)) {
+      final blackOk = await fallbackEscPosEngine.printMonochromeImageBlack(
+        blackLayer,
+      );
+      if (!blackOk) {
+        return false;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+    }
+
+    if (!_hasInkPixels(redLayer)) {
+      return true;
+    }
+
+    final officialOk = await _tryPrintViaOfficialSdk(
+      mac: mac,
+      image: redLayer,
+      printRed: true,
+    );
+    if (officialOk) {
+      return true;
+    }
+    return fallbackEscPosEngine.printMonochromeImageRed(redLayer);
+  }
+}
+
+const MethodChannel _gainschaB380ColorChannel = MethodChannel(
+  'com.example.nprinter_bluetooth_only/gainscha_b380_color',
+);
+
+// Official SDK is not bundled in this repository yet.
+// Until a native SDK package is linked, we keep best-effort color attempts.
+const PrinterColorSupport _configuredColorSupport =
+    PrinterColorSupport.escPosBestEffort;
+
+Future<bool> _tryPrintViaOfficialSdk({
+  required String mac,
+  required img.Image image,
+  required bool printRed,
+}) async {
+  if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+    return false;
+  }
+
+  try {
+    final bytes = Uint8List.fromList(img.encodePng(image));
+    final result =
+        await _gainschaB380ColorChannel.invokeMethod<bool>(
+          'printMonochromeLayer',
+          <String, dynamic>{
+            'mac': mac,
+            'imagePngBytes': bytes,
+            'printRed': printRed,
+          },
+        ) ??
+        false;
+    return result;
+  } catch (_) {
+    return false;
+  }
+}
+
+List<int> getBlackCommand() {
+  return const <int>[0x1B, 0x72, 0x00];
+}
+
+Future<int> _getSelectedRedCommandIndex() async {
+  final prefs = await SharedPreferences.getInstance();
+  final savedIndex = prefs.getInt(_selectedRedCommandIndexKey) ?? 0;
+  if (savedIndex < 0 || savedIndex >= _activeRedCommands.length) {
+    return 0;
+  }
+  return savedIndex;
+}
+
+Future<void> saveSelectedRedCommandIndex(int index) async {
+  if (index < 0 || index >= _activeRedCommands.length) {
+    return;
+  }
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setInt(_selectedRedCommandIndexKey, index);
+}
+
+Future<List<int>> getRedCommand() async {
+  final index = await _getSelectedRedCommandIndex();
+  return _activeRedCommands[index];
+}
+
+Future<List<int>> _redCommandTryOrder() async {
+  final selectedIndex = await _getSelectedRedCommandIndex();
+  final order = <int>[
+    selectedIndex,
+    for (var i = 0; i < _activeRedCommands.length; i++)
+      if (i != selectedIndex) i,
+  ];
+  return order;
+}
+
+enum RawRedCommand { commandA, commandB, commandC }
+
+extension RawRedCommandDetails on RawRedCommand {
+  String get label {
+    switch (this) {
+      case RawRedCommand.commandA:
+        return 'Red Command A';
+      case RawRedCommand.commandB:
+        return 'Red Command B';
+      case RawRedCommand.commandC:
+        return 'Red Command C';
+    }
+  }
+
+  List<int> get bytes {
+    switch (this) {
+      case RawRedCommand.commandA:
+        return const <int>[0x1B, 0x72, 0x01];
+      case RawRedCommand.commandB:
+        return const <int>[0x1B, 0x63, 0x30, 0x01];
+      case RawRedCommand.commandC:
+        return const <int>[0x1B, 0x72, 0x31];
+    }
+  }
+}
+
+void _debugPrinterLog(String message) {
+  debugPrint('[nPrinter][printer] $message');
+}
 
 Future<PrinterStatusCheck> _checkEscPosPrinterStatus({
   required String mac,
@@ -120,19 +454,7 @@ Future<PrinterStatusCheck> _checkEscPosPrinterStatus({
 }
 
 String _printAcceptedMessage(PrinterStatusCheck status) {
-  if (status.hasBlockingIssue) {
-    return 'تم إرسال أمر الطباعة، لكن الطابعة تبلغ عن مشكلة: ${status.issueSummary}';
-  }
-
-  if (status.checked && status.supported) {
-    final warning = status.warningSummary;
-    if (warning.isNotEmpty) {
-      return 'تم إرسال أمر الطباعة، ولا توجد أخطاء مانعة. تنبيه: $warning';
-    }
-    return 'تم إرسال أمر الطباعة، والطابعة لا تبلغ عن أخطاء';
-  }
-
-  return 'تم إرسال أمر الطباعة للطابعة. لا يمكن تأكيد خروج الورقة تلقائيًا من هذه الطابعة';
+  return _messagePrintSuccess;
 }
 
 String _normalizeCommandType(String commandType) {
@@ -179,9 +501,11 @@ img.Image _applyPrintRotation(img.Image source, int rotationDegrees) {
   return img.copyRotate(source, angle: normalizedRotation);
 }
 
-List<int> _buildPrintColorBytes(String printColor) {
+List<int> _buildPrintColorBytes(String printColor, {List<int>? redCommand}) {
   final normalized = _normalizePrintColor(printColor);
-  final n = normalized == 'red' ? 1 : 0;
+  if (normalized == 'red') {
+    return <int>[0x1D, 0x42, 0x00, ...(redCommand ?? _activeRedCommands.first)];
+  }
 
   // ESC r n : two-color selection.
   // Standard ESC/POS mapping:
@@ -191,7 +515,7 @@ List<int> _buildPrintColorBytes(String printColor) {
   // artifacts if the printer state was changed by previous jobs/tools.
   return <int>[
     0x1D, 0x42, 0x00, // GS B 0: reverse off
-    0x1B, 0x72, n, // ESC r n
+    ...getBlackCommand(),
   ];
 }
 
@@ -366,6 +690,177 @@ Future<void> _playBeepWithFallback({
   }
 }
 
+Future<bool> _writeUsingBlackPdfMethod(
+  List<int> data, {
+  required String methodName,
+  String? printerAddress,
+  bool useChunks = false,
+  int chunkSize = 32,
+  int delayMs = 150,
+  RawRedCommand? redCommand,
+}) async {
+  final address = printerAddress ?? 'unknown';
+  final connectionStatus = await PrintBluetoothThermal.connectionStatus;
+  final firstBytes = data.take(30).toList(growable: false);
+  _debugPrinterLog(
+    'method=$methodName address=$address library=$_printerLibraryName '
+    'dataLength=${data.length} writeMethod=$_workingWriteMethodName '
+    'connectionStatus=$connectionStatus sendFormat=List<int> '
+    'first30=$firstBytes selectedRedCommand=${redCommand?.label ?? 'none'} '
+    'chunkMode=$useChunks stage=write_start',
+  );
+
+  if (data.isEmpty) {
+    _debugPrinterLog(
+      'method=$methodName address=$address success=true stage=write_empty',
+    );
+    return true;
+  }
+
+  if (!useChunks) {
+    try {
+      final payload = data.toList(growable: false);
+      final success = await PrintBluetoothThermal.writeBytes(payload);
+      _debugPrinterLog(
+        'method=$methodName address=$address writeMethod=$_workingWriteMethodName '
+        'sendFormat=${payload.runtimeType} success=$success stage=write_complete',
+      );
+      return success;
+    } catch (e, stackTrace) {
+      _debugPrinterLog(
+        'method=$methodName address=$address writeMethod=$_workingWriteMethodName '
+        'success=false stage=write_exception error=$e',
+      );
+      debugPrint(stackTrace.toString());
+      rethrow;
+    }
+  }
+
+  var chunkIndex = 0;
+  for (int i = 0; i < data.length; i += chunkSize) {
+    final end = (i + chunkSize > data.length) ? data.length : i + chunkSize;
+    final chunk = data.sublist(i, end).toList(growable: false);
+    _debugPrinterLog(
+      'method=$methodName address=$address writeMethod=$_workingWriteMethodName '
+      'chunkIndex=$chunkIndex chunkLength=${chunk.length} '
+      'sendFormat=${chunk.runtimeType} first30=${chunk.take(30).toList(growable: false)} '
+      'stage=chunk_write_start',
+    );
+    try {
+      final success = await PrintBluetoothThermal.writeBytes(chunk);
+      _debugPrinterLog(
+        'method=$methodName address=$address writeMethod=$_workingWriteMethodName '
+        'chunkIndex=$chunkIndex success=$success stage=chunk_write_complete',
+      );
+      if (!success) {
+        return false;
+      }
+    } catch (e, stackTrace) {
+      _debugPrinterLog(
+        'method=$methodName address=$address writeMethod=$_workingWriteMethodName '
+        'chunkIndex=$chunkIndex success=false stage=chunk_write_exception error=$e',
+      );
+      debugPrint(stackTrace.toString());
+      rethrow;
+    }
+    await Future<void>.delayed(Duration(milliseconds: delayMs));
+    chunkIndex++;
+  }
+
+  return true;
+}
+
+Future<bool> sendPrinterBytes(
+  List<int> bytes, {
+  String methodName = 'sendPrinterBytes',
+  String? printerAddress,
+  bool useChunks = false,
+}) async {
+  return _writeUsingBlackPdfMethod(
+    bytes,
+    methodName: methodName,
+    printerAddress: printerAddress,
+    useChunks: useChunks,
+  );
+}
+
+Future<void> sendRawBytes(
+  Uint8List data, {
+  String methodName = 'sendRawBytes',
+  String? printerAddress,
+  bool useChunks = false,
+  RawRedCommand? redCommand,
+}) async {
+  final effectiveMethodName = redCommand == null
+      ? methodName
+      : '$methodName.${redCommand.label}';
+  final success = await sendPrinterBytes(
+    data,
+    methodName: effectiveMethodName,
+    printerAddress: printerAddress,
+    useChunks: useChunks,
+  );
+  if (!success) {
+    throw Exception(
+      'writeBytes returned false. method=$methodName library=$_printerLibraryName writeMethod=$_workingWriteMethodName',
+    );
+  }
+}
+
+Future<void> sendRawBytesExactlyLikeWorkingPdfPath(
+  Uint8List data, {
+  String methodName = 'sendRawBytesExactlyLikeWorkingPdfPath',
+  String? printerAddress,
+  bool useChunks = false,
+  RawRedCommand? redCommand,
+}) async {
+  await sendRawBytes(
+    data,
+    methodName: methodName,
+    printerAddress: printerAddress,
+    useChunks: useChunks,
+    redCommand: redCommand,
+  );
+}
+
+Future<void> printPlainTextDirect(
+  String text,
+  PrintColorMode mode, {
+  String? printerAddress,
+}) async {
+  _debugPrinterLog(
+    'method=printPlainTextDirect address=${printerAddress ?? 'unknown'} '
+    'mode=$mode textLength=${text.length} stage=blocked_raw_text',
+  );
+  throw UnsupportedError(
+    'RAW text printing is disabled. Use printTextAsRasterImage instead.',
+  );
+}
+
+Future<void> printMixedTextDirect(
+  List<PrintPart> parts, {
+  String? printerAddress,
+}) async {
+  _debugPrinterLog(
+    'method=printMixedTextDirect address=${printerAddress ?? 'unknown'} '
+    'parts=${parts.length} stage=blocked_raw_text',
+  );
+  throw UnsupportedError('Colored RAW text printing is disabled.');
+}
+
+Future<void> printRawColorTest({
+  String? printerAddress,
+  bool useChunks = false,
+  RawRedCommand redCommand = RawRedCommand.commandA,
+}) async {
+  _debugPrinterLog(
+    'method=printRawColorTest address=${printerAddress ?? 'unknown'} '
+    'selectedRedCommand=${redCommand.label} useChunks=$useChunks '
+    'stage=blocked_color',
+  );
+  throw UnsupportedError('RAW color test is disabled. Print black only.');
+}
+
 Future<ui.Image> _decodeUiImage(Uint8List bytes) {
   final completer = Completer<ui.Image>();
   ui.decodeImageFromList(bytes, completer.complete);
@@ -390,38 +885,25 @@ int _pixelLuminance(int r, int g, int b) {
   return ((r * 299) + (g * 587) + (b * 114)) ~/ 1000;
 }
 
-bool _isStrongRedCandidate(int r, int g, int b) {
-  final strongestNonRed = math.max(g, b);
-  final redDominance = r - strongestNonRed;
-  final channelSpread =
-      math.max(r, strongestNonRed) - math.min(r, math.min(g, b));
-  return r >= 120 && redDominance >= 34 && channelSpread >= 44;
+bool _isRedPixel(int r, int g, int b) {
+  return r > 120 && r > g * 1.35 && r > b * 1.35;
 }
 
-bool _isReddishEdgeCandidate(int r, int g, int b) {
-  final strongestNonRed = math.max(g, b);
-  final redDominance = r - strongestNonRed;
-  final channelSpread =
-      math.max(r, strongestNonRed) - math.min(r, math.min(g, b));
-  return r >= 95 && redDominance >= 16 && channelSpread >= 24;
+bool _isBlackPixel(int r, int g, int b) {
+  return r < 110 && g < 110 && b < 110;
 }
 
-_DualColorLayers _splitDualColorLayers(img.Image source) {
-  final blackLayer = img.Image(
+img.Image createMonochromeLayer(img.Image source, {int threshold = 168}) {
+  return _toBilevelImage(source, threshold: threshold);
+}
+
+img.Image createBlackLayer(img.Image source) {
+  final output = img.Image(
     width: source.width,
     height: source.height,
     numChannels: 4,
   );
-  final redLayer = img.Image(
-    width: source.width,
-    height: source.height,
-    numChannels: 4,
-  );
-  img.fill(blackLayer, color: img.ColorRgba8(255, 255, 255, 255));
-  img.fill(redLayer, color: img.ColorRgba8(255, 255, 255, 255));
-
-  var hasBlackPixels = false;
-  var hasRedPixels = false;
+  img.fill(output, color: img.ColorRgba8(255, 255, 255, 255));
 
   for (var y = 0; y < source.height; y++) {
     for (var x = 0; x < source.width; x++) {
@@ -433,37 +915,70 @@ _DualColorLayers _splitDualColorLayers(img.Image source) {
       final r = pixel.r.toInt();
       final g = pixel.g.toInt();
       final b = pixel.b.toInt();
-      final luminance = _pixelLuminance(r, g, b);
-
-      // Keep only strong, intentional red pixels in the red layer.
-      if (_isStrongRedCandidate(r, g, b)) {
-        hasRedPixels = true;
-        redLayer.setPixelRgba(x, y, 0, 0, 0, 255);
-        continue;
-      }
-
-      // Anti-aliased red/pink edges should not be interpreted as black.
-      // If a pixel is slightly reddish but bright, keep it white.
-      if (_isReddishEdgeCandidate(r, g, b)) {
-        if (luminance < 90) {
-          hasRedPixels = true;
-          redLayer.setPixelRgba(x, y, 0, 0, 0, 255);
-        }
-        continue;
-      }
-
-      if (luminance < 168) {
-        hasBlackPixels = true;
-        blackLayer.setPixelRgba(x, y, 0, 0, 0, 255);
+      if (_isBlackPixel(r, g, b)) {
+        output.setPixelRgba(x, y, 0, 0, 0, 255);
       }
     }
   }
 
+  return output;
+}
+
+img.Image createRedLayerAsMonochrome(img.Image source) {
+  final output = img.Image(
+    width: source.width,
+    height: source.height,
+    numChannels: 4,
+  );
+  img.fill(output, color: img.ColorRgba8(255, 255, 255, 255));
+
+  for (var y = 0; y < source.height; y++) {
+    for (var x = 0; x < source.width; x++) {
+      final pixel = source.getPixel(x, y);
+      if (pixel.a.toInt() <= 8) {
+        continue;
+      }
+
+      final r = pixel.r.toInt();
+      final g = pixel.g.toInt();
+      final b = pixel.b.toInt();
+      if (_isRedPixel(r, g, b)) {
+        output.setPixelRgba(x, y, 0, 0, 0, 255);
+      }
+    }
+  }
+
+  return output;
+}
+
+bool _hasInkPixels(img.Image source) {
+  for (var y = 0; y < source.height; y++) {
+    for (var x = 0; x < source.width; x++) {
+      final pixel = source.getPixel(x, y);
+      if (pixel.a.toInt() <= 8) {
+        continue;
+      }
+      final luminance = _pixelLuminance(
+        pixel.r.toInt(),
+        pixel.g.toInt(),
+        pixel.b.toInt(),
+      );
+      if (luminance < 240) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+_DualColorLayers _splitDualColorLayers(img.Image source) {
+  final blackLayer = createBlackLayer(source);
+  final redLayer = createRedLayerAsMonochrome(source);
   return _DualColorLayers(
     blackLayer: blackLayer,
     redLayer: redLayer,
-    hasBlackPixels: hasBlackPixels,
-    hasRedPixels: hasRedPixels,
+    hasBlackPixels: _hasInkPixels(blackLayer),
+    hasRedPixels: _hasInkPixels(redLayer),
   );
 }
 
@@ -768,6 +1283,89 @@ Future<List<int>> _convertPreparedImageToEscPosBytes(
   return bytes;
 }
 
+bool _containsSubsequence(List<int> source, List<int> sequence) {
+  if (sequence.isEmpty) {
+    return true;
+  }
+  if (source.length < sequence.length) {
+    return false;
+  }
+  for (var i = 0; i <= source.length - sequence.length; i++) {
+    var matches = true;
+    for (var j = 0; j < sequence.length; j++) {
+      if (source[i + j] != sequence[j]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      return true;
+    }
+  }
+  return false;
+}
+
+Future<bool> printRasterImageWithColor({
+  required img.Image image,
+  required List<int> colorCommand,
+  required double paperWidthMm,
+  required Generator generator,
+  String contentAlignment = 'center',
+  String? debugPrinterAddress,
+}) async {
+  final align = _resolvePrintAlignment(contentAlignment);
+  final rasterBytes = await _convertPreparedImageToEscPosBytes(
+    image,
+    paperWidthMm,
+    align: align,
+  );
+
+  final hasResetInRaster =
+      _containsSubsequence(rasterBytes, const <int>[0x1B, 0x40]) ||
+      _containsSubsequence(rasterBytes, const <int>[0x1B, 0x72, 0x00]);
+  if (hasResetInRaster) {
+    final setColorOk = await sendPrinterBytes(
+      <int>[...colorCommand],
+      methodName: 'printRasterImageWithColor.setColor',
+      printerAddress: debugPrinterAddress,
+    );
+    if (!setColorOk) {
+      return false;
+    }
+
+    final rasterOk = await sendPrinterBytes(
+      rasterBytes,
+      methodName: 'printRasterImageWithColor.raster',
+      printerAddress: debugPrinterAddress,
+    );
+    if (!rasterOk) {
+      return false;
+    }
+
+    return sendPrinterBytes(
+      <int>[...getBlackCommand(), 0x1B, 0x64, 0x02],
+      methodName: 'printRasterImageWithColor.resetToBlack',
+      printerAddress: debugPrinterAddress,
+    );
+  }
+
+  final bytes = <int>[
+    ...generator.reset(),
+    ...colorCommand,
+    ...rasterBytes,
+    ...getBlackCommand(),
+    0x1B,
+    0x64,
+    0x02,
+  ];
+
+  return sendPrinterBytes(
+    bytes,
+    methodName: 'printRasterImageWithColor',
+    printerAddress: debugPrinterAddress,
+  );
+}
+
 Future<bool> _printImageByCommandType({
   required String commandType,
   required ui.Image image,
@@ -781,6 +1379,8 @@ Future<bool> _printImageByCommandType({
   String dualColorPass = _dualColorPassAuto,
   bool forceBilevel = false,
   int? tsplDensity,
+  String? debugPrinterAddress,
+  List<int>? redCommandBytes,
 }) async {
   final preparedImage = await _prepareImageForCommand(
     image,
@@ -794,8 +1394,6 @@ Future<bool> _printImageByCommandType({
       ? _toBilevelImage(preparedImage)
       : preparedImage;
   if (_isEscCommandType(commandType)) {
-    final align = _resolvePrintAlignment(contentAlignment);
-
     if (printColor == 'black_red') {
       final layers = _splitDualColorLayers(preparedImage);
       final shouldPrintBlack =
@@ -806,17 +1404,14 @@ Future<bool> _printImageByCommandType({
           dualColorPass == _dualColorPassRed;
 
       if (shouldPrintBlack && layers.hasBlackPixels) {
-        final blackBytes = await _convertPreparedImageToEscPosBytes(
-          layers.blackLayer,
-          paperWidthMm,
-          align: align,
+        final sentBlack = await printRasterImageWithColor(
+          image: layers.blackLayer,
+          colorCommand: getBlackCommand(),
+          paperWidthMm: paperWidthMm,
+          generator: generator,
+          contentAlignment: contentAlignment,
+          debugPrinterAddress: debugPrinterAddress,
         );
-        final blackJob = <int>[
-          ...generator.reset(),
-          ..._buildPrintColorBytes('black'),
-          ...blackBytes,
-        ];
-        final sentBlack = await PrintBluetoothThermal.writeBytes(blackJob);
         if (!sentBlack) {
           return false;
         }
@@ -824,17 +1419,14 @@ Future<bool> _printImageByCommandType({
       }
 
       if (shouldPrintRed && layers.hasRedPixels) {
-        final redBytes = await _convertPreparedImageToEscPosBytes(
-          layers.redLayer,
-          paperWidthMm,
-          align: align,
+        final sentRed = await printRasterImageWithColor(
+          image: layers.redLayer,
+          colorCommand: redCommandBytes ?? await getRedCommand(),
+          paperWidthMm: paperWidthMm,
+          generator: generator,
+          contentAlignment: contentAlignment,
+          debugPrinterAddress: debugPrinterAddress,
         );
-        final redJob = <int>[
-          ...generator.reset(),
-          ..._buildPrintColorBytes('red'),
-          ...redBytes,
-        ];
-        final sentRed = await PrintBluetoothThermal.writeBytes(redJob);
         if (!sentRed) {
           return false;
         }
@@ -843,17 +1435,19 @@ Future<bool> _printImageByCommandType({
       return true;
     }
 
-    final imageBytes = await _convertPreparedImageToEscPosBytes(
-      imageForPrint,
-      paperWidthMm,
-      align: align,
+    final layerImage = printColor == 'black'
+        ? imageForPrint
+        : createMonochromeLayer(imageForPrint);
+    return printRasterImageWithColor(
+      image: layerImage,
+      colorCommand: printColor == 'black'
+          ? getBlackCommand()
+          : (redCommandBytes ?? await getRedCommand()),
+      paperWidthMm: paperWidthMm,
+      generator: generator,
+      contentAlignment: contentAlignment,
+      debugPrinterAddress: debugPrinterAddress,
     );
-    final chunkJob = <int>[
-      ...generator.reset(),
-      ..._buildPrintColorBytes(printColor),
-      ...imageBytes,
-    ];
-    return PrintBluetoothThermal.writeBytes(chunkJob);
   }
 
   final paperWidthDots = _resolveRasterTargetWidth(
@@ -909,6 +1503,233 @@ Future<bool> _printImageByCommandType({
   );
 }
 
+Future<bool> _printEscPosImageInBlack({
+  required img.Image image,
+  required double paperWidthMm,
+  required String contentAlignment,
+  required Generator generator,
+  String? debugPrinterAddress,
+}) async {
+  final setBlackOk = await sendPrinterBytes(
+    getBlackCommand(),
+    methodName: '_printEscPosImageInBlack.setBlack',
+    printerAddress: debugPrinterAddress,
+  );
+  if (!setBlackOk) {
+    return false;
+  }
+  return printRasterImageWithColor(
+    image: image,
+    colorCommand: getBlackCommand(),
+    paperWidthMm: paperWidthMm,
+    generator: generator,
+    contentAlignment: contentAlignment,
+    debugPrinterAddress: debugPrinterAddress,
+  );
+}
+
+Future<bool> _printEscPosImageInRed({
+  required img.Image image,
+  required List<int> redCommand,
+  required double paperWidthMm,
+  required String contentAlignment,
+  required Generator generator,
+  String? debugPrinterAddress,
+}) async {
+  final printed = await printRasterImageWithColor(
+    image: image,
+    colorCommand: redCommand,
+    paperWidthMm: paperWidthMm,
+    generator: generator,
+    contentAlignment: contentAlignment,
+    debugPrinterAddress: debugPrinterAddress,
+  );
+  if (!printed) {
+    return false;
+  }
+
+  return sendPrinterBytes(
+    getBlackCommand(),
+    methodName: '_printEscPosImageInRed.resetBlack',
+    printerAddress: debugPrinterAddress,
+  );
+}
+
+Future<bool> _withWorkingEscPosConnection({
+  required String mac,
+  required double paperWidth,
+  required String methodName,
+  required Future<bool> Function(Generator generator) runJob,
+  int beepBefore = 0,
+  int beepAfter = 0,
+  String beepType = '0x07',
+  int feedLines = 0,
+  bool autoCut = false,
+}) async {
+  try {
+    final paperSize = _resolvePaperSize(paperWidth);
+    final profile = await CapabilityProfile.load();
+    final generator = Generator(paperSize, profile);
+
+    await PrintBluetoothThermal.disconnect;
+    final hasBluetoothPermissions = await requestBluetoothPermissions();
+    if (!hasBluetoothPermissions) {
+      return false;
+    }
+
+    final prePrintStatus = await _checkEscPosPrinterStatus(
+      mac: mac,
+      effectiveCommandType: 'esc',
+    );
+    if (prePrintStatus.hasBlockingIssue) {
+      return false;
+    }
+
+    final connected = await PrintBluetoothThermal.connect(
+      macPrinterAddress: mac,
+    );
+    if (!connected) {
+      return false;
+    }
+
+    await _playBeepWithFallback(
+      count: beepBefore,
+      beepType: beepType,
+      generator: generator,
+    );
+
+    final jobOk = await runJob(generator);
+    if (!jobOk) {
+      await PrintBluetoothThermal.disconnect;
+      return false;
+    }
+
+    final safeFeedLines = feedLines.clamp(0, 255).toInt();
+    if (safeFeedLines > 0) {
+      final feedOk = await sendPrinterBytes(
+        generator.feed(safeFeedLines),
+        methodName: '$methodName.feed',
+        printerAddress: mac,
+      );
+      if (!feedOk) {
+        await PrintBluetoothThermal.disconnect;
+        return false;
+      }
+    }
+
+    if (autoCut) {
+      await Future<void>.delayed(const Duration(milliseconds: 220));
+      final cutOk = await sendPrinterBytes(
+        <int>[...generator.cut()],
+        methodName: '$methodName.cut',
+        printerAddress: mac,
+      );
+      if (!cutOk) {
+        await PrintBluetoothThermal.disconnect;
+        return false;
+      }
+    }
+
+    await _playBeepWithFallback(
+      count: beepAfter,
+      beepType: beepType,
+      generator: generator,
+    );
+    final resetColorOk = await sendPrinterBytes(
+      _buildPrintColorBytes('black'),
+      methodName: '$methodName.finishBlack',
+      printerAddress: mac,
+    );
+    if (!resetColorOk) {
+      await PrintBluetoothThermal.disconnect;
+      return false;
+    }
+    await PrintBluetoothThermal.disconnect;
+    return true;
+  } catch (e, stackTrace) {
+    _debugPrinterLog(
+      'method=$methodName address=$mac success=false stage=exception error=$e',
+    );
+    debugPrint(stackTrace.toString());
+    await PrintBluetoothThermal.disconnect;
+    return false;
+  }
+}
+
+Future<List<img.Image>> _renderPdfToPreparedImages({
+  required String pdfPath,
+  required double paperWidth,
+  required String fitMode,
+  required String printerProfile,
+  required int printRotationDegrees,
+}) async {
+  PdfDocument? document;
+  final pages = <img.Image>[];
+
+  try {
+    final rasterTargetWidth = _resolveRasterTargetWidth(
+      paperWidth,
+      printerProfile: printerProfile,
+    );
+    final pdfDocument = await PdfDocument.openFile(pdfPath);
+    document = pdfDocument;
+
+    for (
+      var pageNumber = 1;
+      pageNumber <= pdfDocument.pagesCount;
+      pageNumber++
+    ) {
+      final page = await pdfDocument.getPage(pageNumber);
+      try {
+        final renderWidth = _isFitToWidthMode(fitMode)
+            ? (rasterTargetWidth * 4).toDouble()
+            : page.width.toDouble().clamp(300.0, 2400.0);
+        final safePageWidth = page.width <= 0 ? 1.0 : page.width.toDouble();
+        final safePageHeight = page.height.toDouble();
+        final dynamicHeight = ((renderWidth * safePageHeight) / safePageWidth)
+            .clamp(300.0, 5000.0);
+
+        final pageImage = await page.render(
+          width: renderWidth,
+          height: dynamicHeight,
+          format: PdfPageImageFormat.png,
+          backgroundColor: '#FFFFFF',
+        );
+        if (pageImage == null) {
+          continue;
+        }
+
+        final decoded = img.decodeImage(pageImage.bytes);
+        if (decoded == null) {
+          continue;
+        }
+
+        final rotated = _applyPrintRotation(decoded, printRotationDegrees);
+        final prepared = _isFitToWidthMode(fitMode)
+            ? img.copyResize(
+                rotated,
+                width: rasterTargetWidth,
+                interpolation: img.Interpolation.average,
+              )
+            : (rotated.width > rasterTargetWidth
+                  ? img.copyResize(
+                      rotated,
+                      width: rasterTargetWidth,
+                      interpolation: img.Interpolation.average,
+                    )
+                  : rotated);
+        pages.add(prepared);
+      } finally {
+        await page.close();
+      }
+    }
+
+    return pages;
+  } finally {
+    await document?.close();
+  }
+}
+
 Future<void> printBluetoothReceipt({
   required BuildContext context,
   required String text,
@@ -930,41 +1751,42 @@ Future<void> printBluetoothReceipt({
   String textFontFamily = 'NotoKufiArabicBold',
 }) async {
   try {
+    final normalizedText = text.trim();
+    if (normalizedText.isEmpty) {
+      _showMessage(context, _messageTextRequired);
+      return;
+    }
     final normalizedCommandType = _normalizeCommandType(commandType);
     var effectiveCommandType = _resolveEffectiveCommandType(
       normalizedCommandType,
     );
-    final normalizedPrintColor = _normalizePrintColor(printColor);
+    final normalizedRequestedPrintColor = _normalizePrintColor(printColor);
+    const normalizedPrintColor = 'black';
+    if (normalizedRequestedPrintColor != 'black') {
+      _debugPrinterLog(
+        'method=printBluetoothReceipt address=$mac '
+        'requestedMode=$normalizedRequestedPrintColor stage=force_black_path',
+      );
+    }
 
     if (!_supportsCommandType(normalizedCommandType)) {
-      _showMessage(
-        context,
-        'نوع الكوماند غير مدعوم. الأنواع المتاحة: Auto / ESC / TSPL / CPCL',
-      );
+      _showMessage(context, _messageConnectionFailed);
       return;
     }
 
-    if (_isColorMode(normalizedPrintColor) &&
-        !_isEscCommandType(effectiveCommandType)) {
+    if (!_isEscCommandType(effectiveCommandType)) {
       effectiveCommandType = 'esc';
-      _showMessage(
-        context,
-        'وضع اللون الأحمر/الثنائي يعمل على ESC فقط. تم التحويل تلقائيًا إلى ESC.',
-      );
     }
     final paperSize = _resolvePaperSize(paperWidth);
     final profile = await CapabilityProfile.load();
     final generator = Generator(paperSize, profile);
-    final textChunks = _splitTextIntoChunks(text);
+    final textChunks = _splitTextIntoChunks(normalizedText);
 
     await PrintBluetoothThermal.disconnect;
     final hasBluetoothPermissions = await requestBluetoothPermissions();
     if (!hasBluetoothPermissions) {
       if (!context.mounted) return;
-      _showMessage(
-        context,
-        'Bluetooth permission is required before printing. On iPhone, if you denied it once, enable it from Settings.',
-      );
+      _showMessage(context, _messageConnectionFailed);
       return;
     }
 
@@ -974,10 +1796,7 @@ Future<void> printBluetoothReceipt({
     );
     if (prePrintStatus.hasBlockingIssue) {
       if (!context.mounted) return;
-      _showMessage(
-        context,
-        'لا يمكن بدء الطباعة: ${prePrintStatus.issueSummary}',
-      );
+      _showMessage(context, _messageConnectionFailed);
       return;
     }
 
@@ -986,7 +1805,7 @@ Future<void> printBluetoothReceipt({
     );
     if (!connected) {
       if (!context.mounted) return;
-      _showMessage(context, 'فشل الاتصال بالطابعة عبر البلوتوث');
+      _showMessage(context, _messageConnectionFailed);
       return;
     }
 
@@ -1035,10 +1854,7 @@ Future<void> printBluetoothReceipt({
     if (!sentText) {
       await PrintBluetoothThermal.disconnect;
       if (!context.mounted) return;
-      _showMessage(
-        context,
-        'فشل إرسال جزء من النص للطابعة. تأكد من وجود ورق وإغلاق الغطاء جيدًا.',
-      );
+      _showMessage(context, _messageConnectionFailed);
       return;
     }
     if (isDualColorJob) {
@@ -1047,10 +1863,7 @@ Future<void> printBluetoothReceipt({
       if (!sentRedText) {
         await PrintBluetoothThermal.disconnect;
         if (!context.mounted) return;
-        _showMessage(
-          context,
-          'فشل إرسال الجزء الأحمر من النص للطابعة. تأكد من وجود ورق وإغلاق الغطاء جيدًا.',
-        );
+        _showMessage(context, _messageConnectionFailed);
         return;
       }
     }
@@ -1092,12 +1905,418 @@ Future<void> printBluetoothReceipt({
   } catch (e) {
     await PrintBluetoothThermal.disconnect;
     if (context.mounted) {
-      _showMessage(context, 'حدث خطأ أثناء الطباعة: $e');
+      _showMessage(context, _messageConnectionFailed);
     }
   }
 }
 
-Future<void> printBluetoothPdfReceipt({
+Future<void> printBluetoothColorTest({
+  required BuildContext context,
+  required String mac,
+  EscPosTextEncoding textEncoding = EscPosTextEncoding.windows1256,
+  bool useAlternativeRedCommand = false,
+}) async {
+  _debugPrinterLog(
+    'method=printBluetoothColorTest address=$mac textEncoding=$textEncoding '
+    'useAlternativeRedCommand=$useAlternativeRedCommand stage=blocked_color',
+  );
+  _showMessage(context, _messageConnectionFailed);
+}
+
+Future<bool> sendRawBytesUsingWorkingConnection(
+  List<int> bytes, {
+  required String mac,
+  required double paperWidth,
+  int beepBefore = 0,
+  int beepAfter = 0,
+  String beepType = '0x07',
+  String methodName = 'sendRawBytesUsingWorkingConnection',
+}) async {
+  return _withWorkingEscPosConnection(
+    mac: mac,
+    paperWidth: paperWidth,
+    methodName: methodName,
+    beepBefore: beepBefore,
+    beepAfter: beepAfter,
+    beepType: beepType,
+    runJob: (_) async {
+      return sendPrinterBytes(
+        bytes,
+        methodName: methodName,
+        printerAddress: mac,
+      );
+    },
+  );
+}
+
+ColorPrintEngine _createColorPrintEngine({
+  required String mac,
+  required BlackPrintCallback printBlack,
+  required RedPrintWithCommandCallback printRedWithCommand,
+}) {
+  final escPosEngine = EscPosBestEffortEngine(
+    printBlack: printBlack,
+    printRedWithCommand: printRedWithCommand,
+    redCommands: _activeRedCommands,
+    onRedCommandSelected: saveSelectedRedCommandIndex,
+  );
+
+  switch (_configuredColorSupport) {
+    case PrinterColorSupport.blackOnly:
+      return BlackOnlyEngine(printBlack: printBlack);
+    case PrinterColorSupport.gainschaB380OfficialSdk:
+      return GainschaB380OfficialEngine(
+        mac: mac,
+        fallbackEscPosEngine: escPosEngine,
+      );
+    case PrinterColorSupport.escPosBestEffort:
+      return escPosEngine;
+  }
+}
+
+Future<bool> printRedTextWithFallbackCommands({
+  required String text,
+  required String mac,
+  required double paperWidth,
+  EscPosTextEncoding textEncoding = EscPosTextEncoding.windows1256,
+  int beepBefore = 0,
+  int beepAfter = 0,
+  String beepType = '0x07',
+  int feedLines = 0,
+  bool autoCut = false,
+  bool textBorder = false,
+  String fitMode = 'fit_width',
+  String contentAlignment = 'center',
+  String printerProfile = 'auto',
+  int printRotationDegrees = 0,
+  int textFontSize = 26,
+  String textFontFamily = 'NotoKufiArabicBold',
+}) async {
+  final normalizedText = text.trim();
+  if (normalizedText.isEmpty) {
+    return false;
+  }
+
+  final textImage = await generateSimpleTextImage(
+    normalizedText,
+    paperWidth,
+    addBorder: textBorder,
+    printerProfile: printerProfile,
+    printColor: 'black',
+    fontSize: textFontSize.toDouble(),
+    fontFamily: textFontFamily,
+  );
+  final preparedTextImage = await _prepareImageForCommand(
+    textImage,
+    paperWidth,
+    forceFitToPaperWidth: _isFitToWidthMode(fitMode),
+    preferSharpResize: true,
+    printerProfile: printerProfile,
+    printRotationDegrees: printRotationDegrees,
+  );
+  final monochromeLayer = createMonochromeLayer(preparedTextImage);
+  if (!_hasInkPixels(monochromeLayer)) {
+    return false;
+  }
+
+  return _withWorkingEscPosConnection(
+    mac: mac,
+    paperWidth: paperWidth,
+    methodName: 'printRedTextWithFallbackCommands',
+    beepBefore: beepBefore,
+    beepAfter: beepAfter,
+    beepType: beepType,
+    feedLines: feedLines,
+    autoCut: autoCut,
+    runJob: (generator) async {
+      final engine = _createColorPrintEngine(
+        mac: mac,
+        printBlack: (layer) {
+          return _printEscPosImageInBlack(
+            image: layer,
+            paperWidthMm: paperWidth,
+            contentAlignment: contentAlignment,
+            generator: generator,
+            debugPrinterAddress: mac,
+          );
+        },
+        printRedWithCommand: (layer, redCommand) {
+          return _printEscPosImageInRed(
+            image: layer,
+            redCommand: redCommand,
+            paperWidthMm: paperWidth,
+            contentAlignment: contentAlignment,
+            generator: generator,
+            debugPrinterAddress: mac,
+          );
+        },
+      );
+      return engine.printMonochromeImageRed(monochromeLayer);
+    },
+  );
+}
+
+Future<bool> printMixedTextWithFallbackCommands({
+  required List<PrintPart> parts,
+  required String mac,
+  required double paperWidth,
+  EscPosTextEncoding textEncoding = EscPosTextEncoding.windows1256,
+  int beepBefore = 0,
+  int beepAfter = 0,
+  String beepType = '0x07',
+  int feedLines = 0,
+  bool autoCut = false,
+  bool textBorder = false,
+  String fitMode = 'fit_width',
+  String contentAlignment = 'center',
+  String printerProfile = 'auto',
+  int printRotationDegrees = 0,
+  int textFontSize = 26,
+  String textFontFamily = 'NotoKufiArabicBold',
+}) async {
+  final effectiveParts = parts
+      .where((part) => part.text.isNotEmpty)
+      .toList(growable: false);
+  if (effectiveParts.isEmpty) {
+    return false;
+  }
+
+  final blackLayerImage = await generateTaggedTextLayerImage(
+    effectiveParts,
+    paperWidth,
+    redLayer: false,
+    addBorder: textBorder,
+    printerProfile: printerProfile,
+    fontSize: textFontSize.toDouble(),
+    fontFamily: textFontFamily,
+  );
+  final redLayerImage = await generateTaggedTextLayerImage(
+    effectiveParts,
+    paperWidth,
+    redLayer: true,
+    addBorder: textBorder,
+    printerProfile: printerProfile,
+    fontSize: textFontSize.toDouble(),
+    fontFamily: textFontFamily,
+  );
+
+  final preparedBlackLayer = await _prepareImageForCommand(
+    blackLayerImage,
+    paperWidth,
+    forceFitToPaperWidth: _isFitToWidthMode(fitMode),
+    preferSharpResize: true,
+    printerProfile: printerProfile,
+    printRotationDegrees: printRotationDegrees,
+  );
+  final preparedRedLayer = await _prepareImageForCommand(
+    redLayerImage,
+    paperWidth,
+    forceFitToPaperWidth: _isFitToWidthMode(fitMode),
+    preferSharpResize: true,
+    printerProfile: printerProfile,
+    printRotationDegrees: printRotationDegrees,
+  );
+
+  final blackLayer = createMonochromeLayer(preparedBlackLayer);
+  final redLayer = createMonochromeLayer(preparedRedLayer);
+  final hasBlackPixels = _hasInkPixels(blackLayer);
+  final hasRedPixels = _hasInkPixels(redLayer);
+  if (!hasBlackPixels && !hasRedPixels) {
+    return false;
+  }
+
+  return _withWorkingEscPosConnection(
+    mac: mac,
+    paperWidth: paperWidth,
+    methodName: 'printMixedTextWithFallbackCommands',
+    beepBefore: beepBefore,
+    beepAfter: beepAfter,
+    beepType: beepType,
+    feedLines: feedLines,
+    autoCut: autoCut,
+    runJob: (generator) async {
+      final engine = _createColorPrintEngine(
+        mac: mac,
+        printBlack: (layer) {
+          return _printEscPosImageInBlack(
+            image: layer,
+            paperWidthMm: paperWidth,
+            contentAlignment: contentAlignment,
+            generator: generator,
+            debugPrinterAddress: mac,
+          );
+        },
+        printRedWithCommand: (layer, redCommand) {
+          return _printEscPosImageInRed(
+            image: layer,
+            redCommand: redCommand,
+            paperWidthMm: paperWidth,
+            contentAlignment: contentAlignment,
+            generator: generator,
+            debugPrinterAddress: mac,
+          );
+        },
+      );
+      return engine.printMonochromeLayersBlackRed(
+        blackLayer: blackLayer,
+        redLayer: redLayer,
+      );
+    },
+  );
+}
+
+Future<bool> printPdfWithColorFallbackCommands({
+  required BuildContext context,
+  required String pdfPath,
+  required double paperWidth,
+  required String mac,
+  required String printColor,
+  int beepBefore = 0,
+  int beepAfter = 0,
+  String beepType = '0x07',
+  bool autoCut = false,
+  int feedLines = 0,
+  String fitMode = 'fit_width',
+  String contentAlignment = 'center',
+  String printerProfile = 'auto',
+  String commandType = 'auto',
+  int printRotationDegrees = 0,
+}) async {
+  if (!context.mounted) return false;
+  final normalizedPrintColor = _normalizePrintColor(printColor);
+  if (!_isColorMode(normalizedPrintColor)) {
+    return false;
+  }
+
+  final activeProfile = getActivePrinterColorProfile();
+  if (!activeProfile.supportsRasterColorAttempt) {
+    return false;
+  }
+
+  final normalizedCommandType = _normalizeCommandType(commandType);
+  if (!_supportsCommandType(normalizedCommandType)) {
+    return false;
+  }
+
+  final preparedPages = await _renderPdfToPreparedImages(
+    pdfPath: pdfPath,
+    paperWidth: paperWidth,
+    fitMode: fitMode,
+    printerProfile: printerProfile,
+    printRotationDegrees: printRotationDegrees,
+  );
+  if (preparedPages.isEmpty) {
+    return false;
+  }
+
+  return _withWorkingEscPosConnection(
+    mac: mac,
+    paperWidth: paperWidth,
+    methodName: 'printPdfWithColorFallbackCommands',
+    beepBefore: beepBefore,
+    beepAfter: beepAfter,
+    beepType: beepType,
+    feedLines: feedLines,
+    autoCut: autoCut,
+    runJob: (generator) async {
+      final engine = _createColorPrintEngine(
+        mac: mac,
+        printBlack: (layer) {
+          return _printEscPosImageInBlack(
+            image: layer,
+            paperWidthMm: paperWidth,
+            contentAlignment: contentAlignment,
+            generator: generator,
+            debugPrinterAddress: mac,
+          );
+        },
+        printRedWithCommand: (layer, redCommand) {
+          return _printEscPosImageInRed(
+            image: layer,
+            redCommand: redCommand,
+            paperWidthMm: paperWidth,
+            contentAlignment: contentAlignment,
+            generator: generator,
+            debugPrinterAddress: mac,
+          );
+        },
+      );
+
+      for (final pageImage in preparedPages) {
+        if (normalizedPrintColor == 'red') {
+          final monoLayer = createMonochromeLayer(pageImage);
+          if (!_hasInkPixels(monoLayer)) {
+            continue;
+          }
+          final redOk = await engine.printMonochromeImageRed(monoLayer);
+          if (!redOk) {
+            return false;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 60));
+          continue;
+        }
+
+        final blackLayer = createBlackLayer(pageImage);
+        final redLayer = createRedLayerAsMonochrome(pageImage);
+        final layersOk = await engine.printMonochromeLayersBlackRed(
+          blackLayer: blackLayer,
+          redLayer: redLayer,
+        );
+        if (!layersOk) {
+          return false;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+      }
+
+      return true;
+    },
+  );
+}
+
+Future<void> printBluetoothPlainTextDirect({
+  required BuildContext context,
+  required String text,
+  required String mac,
+  required PrintColorMode mode,
+}) async {
+  if (mode != PrintColorMode.black) {
+    _showMessage(context, _messageConnectionFailed);
+    return;
+  }
+
+  await printTextAsRasterImage(
+    context: context,
+    text: text,
+    paperWidth: 58,
+    mac: mac,
+  );
+}
+
+Future<void> printBluetoothMixedTextDirect({
+  required BuildContext context,
+  required List<PrintPart> parts,
+  required String mac,
+}) async {
+  _debugPrinterLog(
+    'method=printMixedTextDirect address=$mac parts=${parts.length} '
+    'stage=blocked_color_text',
+  );
+  _showMessage(context, _messageConnectionFailed);
+}
+
+Future<void> printBluetoothRawColorTest({
+  required BuildContext context,
+  required String mac,
+  RawRedCommand redCommand = RawRedCommand.commandA,
+}) async {
+  _debugPrinterLog(
+    'method=printRawColorTest address=$mac library=$_printerLibraryName '
+    'selectedRedCommand=${redCommand.label} stage=blocked_color',
+  );
+  _showMessage(context, _messageConnectionFailed);
+}
+
+Future<bool> printBluetoothPdfReceipt({
   required BuildContext context,
   required String pdfPath,
   required double paperWidth,
@@ -1113,32 +2332,40 @@ Future<void> printBluetoothPdfReceipt({
   String commandType = 'auto',
   String printColor = 'black',
   int printRotationDegrees = 0,
+  bool showMessages = true,
+  List<int>? redCommandBytes,
 }) async {
   PdfDocument? document;
 
   try {
-    final normalizedCommandType = _normalizeCommandType(commandType);
-    var effectiveCommandType = _resolveEffectiveCommandType(
-      normalizedCommandType,
-    );
+    const normalizedCommandType = 'esc';
+    const effectiveCommandType = 'esc';
     final normalizedPrintColor = _normalizePrintColor(printColor);
+    if (!context.mounted) return false;
+    _debugPrinterLog(
+      'method=printBlackPdf address=$mac library=$_printerLibraryName '
+      'mode=$normalizedPrintColor selectedWriteMethod=$_workingWriteMethodName '
+      'stage=start',
+    );
+
+    if (normalizedPrintColor != 'black') {
+      _debugPrinterLog(
+        'method=printBlackPdf address=$mac mode=$normalizedPrintColor '
+        'stage=blocked_non_black_mode',
+      );
+      if (showMessages && context.mounted) {
+        _showMessage(context, _messageConnectionFailed);
+      }
+      return false;
+    }
 
     if (!_supportsCommandType(normalizedCommandType)) {
-      _showMessage(
-        context,
-        'نوع الكوماند غير مدعوم. الأنواع المتاحة: Auto / ESC / TSPL / CPCL',
-      );
-      return;
+      if (showMessages) {
+        _showMessage(context, _messageConnectionFailed);
+      }
+      return false;
     }
 
-    if (_isColorMode(normalizedPrintColor) &&
-        !_isEscCommandType(effectiveCommandType)) {
-      effectiveCommandType = 'esc';
-      _showMessage(
-        context,
-        'وضع اللون الأحمر/الثنائي يعمل على ESC فقط. تم التحويل تلقائيًا إلى ESC.',
-      );
-    }
     final paperSize = _resolvePaperSize(paperWidth);
     final rasterTargetWidth = _resolveRasterTargetWidth(
       paperWidth,
@@ -1150,15 +2377,14 @@ Future<void> printBluetoothPdfReceipt({
     final pdfDocument = await PdfDocument.openFile(pdfPath);
     document = pdfDocument;
 
+    _debugPrinterLog('method=printBlackPdf address=$mac stage=connect_start');
     await PrintBluetoothThermal.disconnect;
     final hasBluetoothPermissions = await requestBluetoothPermissions();
     if (!hasBluetoothPermissions) {
-      if (!context.mounted) return;
-      _showMessage(
-        context,
-        'Bluetooth permission is required before printing. On iPhone, if you denied it once, enable it from Settings.',
-      );
-      return;
+      if (context.mounted && showMessages) {
+        _showMessage(context, _messageConnectionFailed);
+      }
+      return false;
     }
 
     final prePrintStatus = await _checkEscPosPrinterStatus(
@@ -1166,22 +2392,24 @@ Future<void> printBluetoothPdfReceipt({
       effectiveCommandType: effectiveCommandType,
     );
     if (prePrintStatus.hasBlockingIssue) {
-      if (!context.mounted) return;
-      _showMessage(
-        context,
-        'لا يمكن بدء الطباعة: ${prePrintStatus.issueSummary}',
-      );
-      return;
+      if (context.mounted && showMessages) {
+        _showMessage(context, _messageConnectionFailed);
+      }
+      return false;
     }
 
     final connected = await PrintBluetoothThermal.connect(
       macPrinterAddress: mac,
     );
+    _debugPrinterLog(
+      'method=printBlackPdf address=$mac success=$connected stage=connect_complete',
+    );
 
     if (!connected) {
-      if (!context.mounted) return;
-      _showMessage(context, 'فشل الاتصال بالطابعة عبر البلوتوث');
-      return;
+      if (context.mounted && showMessages) {
+        _showMessage(context, _messageConnectionFailed);
+      }
+      return false;
     }
 
     await _playBeepWithFallback(
@@ -1225,10 +2453,12 @@ Future<void> printBluetoothPdfReceipt({
             fitMode: fitMode,
             contentAlignment: contentAlignment,
             printerProfile: printerProfile,
-            printColor: normalizedPrintColor,
+            printColor: 'black',
             printRotationDegrees: printRotationDegrees,
             generator: generator,
             dualColorPass: dualColorPass,
+            debugPrinterAddress: mac,
+            redCommandBytes: redCommandBytes,
           );
           if (!sentPage) {
             return false;
@@ -1242,31 +2472,13 @@ Future<void> printBluetoothPdfReceipt({
       return true;
     }
 
-    final isDualColorJob = normalizedPrintColor == 'black_red';
-    final sentPdf = isDualColorJob
-        ? await printPdfPagesForPass(_dualColorPassBlack)
-        : await printPdfPagesForPass(_dualColorPassAuto);
+    final sentPdf = await printPdfPagesForPass(_dualColorPassAuto);
     if (!sentPdf) {
       await PrintBluetoothThermal.disconnect;
-      if (!context.mounted) return;
-      _showMessage(
-        context,
-        'فشل إرسال صفحة للطابعة. تأكد من وجود ورق وإغلاق الغطاء جيدًا.',
-      );
-      return;
-    }
-    if (isDualColorJob) {
-      await Future<void>.delayed(const Duration(milliseconds: 180));
-      final sentRedPdf = await printPdfPagesForPass(_dualColorPassRed);
-      if (!sentRedPdf) {
-        await PrintBluetoothThermal.disconnect;
-        if (!context.mounted) return;
-        _showMessage(
-          context,
-          'فشل إرسال الجزء الأحمر من الصفحات للطابعة. تأكد من وجود ورق وإغلاق الغطاء جيدًا.',
-        );
-        return;
+      if (context.mounted && showMessages) {
+        _showMessage(context, _messageConnectionFailed);
       }
+      return false;
     }
 
     if (feedLines > 0) {
@@ -1301,15 +2513,194 @@ Future<void> printBluetoothPdfReceipt({
       mac: mac,
       effectiveCommandType: effectiveCommandType,
     );
-    if (!context.mounted) return;
-    _showMessage(context, _printAcceptedMessage(afterPrintStatus));
-  } catch (e) {
-    await PrintBluetoothThermal.disconnect;
-    if (context.mounted) {
-      _showMessage(context, 'حدث خطأ أثناء طباعة PDF: $e');
+    if (!context.mounted) return false;
+    if (showMessages) {
+      _showMessage(context, _printAcceptedMessage(afterPrintStatus));
     }
+    return true;
+  } catch (e, stackTrace) {
+    _debugPrinterLog(
+      'method=printBlackPdf address=$mac success=false stage=exception error=$e',
+    );
+    debugPrint(stackTrace.toString());
+    await PrintBluetoothThermal.disconnect;
+    if (context.mounted && showMessages) {
+      _showMessage(context, _messageConnectionFailed);
+    }
+    return false;
   } finally {
     await document?.close();
+  }
+}
+
+Future<void> printTextAsRasterImage({
+  required BuildContext context,
+  required String text,
+  required double paperWidth,
+  required String mac,
+  int beepBefore = 0,
+  int beepAfter = 0,
+  String beepType = '0x07',
+  bool autoCut = false,
+  int feedLines = 0,
+  bool textBorder = false,
+  String fitMode = 'fit_width',
+  String contentAlignment = 'center',
+  String printerProfile = 'auto',
+  String commandType = 'auto',
+  int printRotationDegrees = 0,
+  int textFontSize = 26,
+  String textFontFamily = 'NotoKufiArabicBold',
+}) async {
+  try {
+    final message = text.trim();
+    if (message.isEmpty) {
+      _showMessage(context, _messageTextRequired);
+      return;
+    }
+    const normalizedCommandType = 'esc';
+    const effectiveCommandType = 'esc';
+
+    _debugPrinterLog(
+      'method=printTextAsRasterImage address=$mac library=$_printerLibraryName '
+      'selectedWriteMethod=$_workingWriteMethodName textLength=${message.length} '
+      'stage=start',
+    );
+
+    if (!_supportsCommandType(normalizedCommandType)) {
+      _showMessage(context, _messageConnectionFailed);
+      return;
+    }
+
+    final paperSize = _resolvePaperSize(paperWidth);
+    final profile = await CapabilityProfile.load();
+    final generator = Generator(paperSize, profile);
+    final textChunks = _splitTextIntoChunks(message);
+
+    await PrintBluetoothThermal.disconnect;
+    final hasBluetoothPermissions = await requestBluetoothPermissions();
+    if (!hasBluetoothPermissions) {
+      if (!context.mounted) return;
+      _showMessage(context, _messageConnectionFailed);
+      return;
+    }
+
+    final prePrintStatus = await _checkEscPosPrinterStatus(
+      mac: mac,
+      effectiveCommandType: effectiveCommandType,
+    );
+    if (prePrintStatus.hasBlockingIssue) {
+      if (!context.mounted) return;
+      _showMessage(context, _messageConnectionFailed);
+      return;
+    }
+
+    _debugPrinterLog(
+      'method=printTextAsRasterImage address=$mac stage=connect_start',
+    );
+    final connected = await PrintBluetoothThermal.connect(
+      macPrinterAddress: mac,
+    );
+    _debugPrinterLog(
+      'method=printTextAsRasterImage address=$mac success=$connected '
+      'stage=connect_complete',
+    );
+    if (!connected) {
+      if (!context.mounted) return;
+      _showMessage(context, _messageConnectionFailed);
+      return;
+    }
+
+    await _playBeepWithFallback(
+      count: beepBefore,
+      beepType: beepType,
+      generator: generator,
+    );
+
+    for (var i = 0; i < textChunks.length; i++) {
+      _debugPrinterLog(
+        'method=printTextAsRasterImage address=$mac chunkIndex=$i '
+        'chunkTextLength=${textChunks[i].length} stage=rasterize_start',
+      );
+      final image = await generateSimpleTextImage(
+        textChunks[i],
+        paperWidth,
+        addBorder: textBorder,
+        printerProfile: printerProfile,
+        printColor: 'black',
+        fontSize: textFontSize.toDouble(),
+        fontFamily: textFontFamily,
+      );
+      final sentChunk = await _printImageByCommandType(
+        commandType: effectiveCommandType,
+        image: image,
+        paperWidthMm: paperWidth,
+        fitMode: fitMode,
+        contentAlignment: contentAlignment,
+        printerProfile: printerProfile,
+        printColor: 'black',
+        printRotationDegrees: printRotationDegrees,
+        generator: generator,
+        dualColorPass: _dualColorPassAuto,
+        forceBilevel: true,
+        debugPrinterAddress: mac,
+      );
+      if (!sentChunk) {
+        await PrintBluetoothThermal.disconnect;
+        if (!context.mounted) return;
+        _showMessage(context, _messageConnectionFailed);
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 160));
+    }
+
+    if (feedLines > 0) {
+      final safeFeedLines = feedLines.clamp(0, 255).toInt();
+      if (_isEscCommandType(effectiveCommandType)) {
+        await PrintBluetoothThermal.writeBytes(generator.feed(safeFeedLines));
+      } else {
+        await PrintBluetoothThermal.writeBytes(
+          List<int>.filled(safeFeedLines, 0x0A),
+        );
+      }
+    }
+
+    if (autoCut && _isEscCommandType(effectiveCommandType)) {
+      await Future<void>.delayed(const Duration(milliseconds: 220));
+      await PrintBluetoothThermal.writeBytes(<int>[...generator.cut()]);
+    }
+
+    await _playBeepWithFallback(
+      count: beepAfter,
+      beepType: beepType,
+      generator: generator,
+    );
+
+    if (_isEscCommandType(effectiveCommandType)) {
+      await PrintBluetoothThermal.writeBytes(_buildPrintColorBytes('black'));
+    }
+
+    await PrintBluetoothThermal.disconnect;
+    final afterPrintStatus = await _checkEscPosPrinterStatus(
+      mac: mac,
+      effectiveCommandType: effectiveCommandType,
+    );
+    _debugPrinterLog(
+      'method=printTextAsRasterImage address=$mac success=true '
+      'statusChecked=${afterPrintStatus.checked} stage=complete',
+    );
+    if (!context.mounted) return;
+    _showMessage(context, _messagePrintSuccess);
+  } catch (e, stackTrace) {
+    _debugPrinterLog(
+      'method=printTextAsRasterImage address=$mac success=false '
+      'stage=exception error=$e',
+    );
+    debugPrint(stackTrace.toString());
+    await PrintBluetoothThermal.disconnect;
+    if (context.mounted) {
+      _showMessage(context, _messageConnectionFailed);
+    }
   }
 }
 

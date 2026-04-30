@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../screens/bluetooth_devices_scan_page.dart';
 import '../services/bluetooth_printer_service.dart';
+import '../services/esc_pos_colored_text_service.dart';
 import '../services/pdf_intent_service.dart';
 import '../widgets/barcode_scanner_dialog.dart';
 
@@ -32,11 +33,22 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   static const String _fitModeKey = 'printer.fitMode';
   static const String _contentAlignmentKey = 'printer.contentAlignment';
   static const String _printColorKey = 'printer.printColor';
+  static const String _textEncodingKey = 'printer.textEncoding';
   static const String _printRotationKey = 'printer.printRotation';
   static const String _commandTypeKey = 'printer.commandType';
   static const String _printTextKey = 'printer.printText';
   static const String _customPaperWidthKey = 'printer.customPaperWidth';
   static const String _defaultPrintText = 'nPrinter';
+  static const String _messagePrintSuccess = 'تمت الطباعة بنجاح';
+  static const String _messageTextRequired = 'الرجاء إدخال نص للطباعة';
+  static const String _messageRedFallback =
+      'تعذر طباعة الأحمر. سيتم الطباعة بالأسود.';
+  static const String _messageBlackRedFallback =
+      'تعذر طباعة الأسود والأحمر. سيتم الطباعة بالأسود.';
+  static const String _messagePdfRedFallback =
+      'تعذر طباعة PDF بالأحمر. سيتم الطباعة بالأسود.';
+  static const String _messagePdfColorFallback =
+      'تعذر طباعة PDF بالألوان. سيتم الطباعة بالأسود.';
   static const String _textFontSizeKey = 'printer.textFontSize';
   static const String _textFontFamilyKey = 'printer.textFontFamily';
   static const String _customPaperWidthValue = 'custom';
@@ -71,6 +83,10 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     'red',
     'black_red',
   ];
+  static const List<String> _allowedTextEncodings = <String>[
+    'windows1256',
+    'cp864',
+  ];
   static const List<String> _allowedPrintRotations = <String>[
     '0',
     '90',
@@ -94,6 +110,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   String fitMode = 'fit_width';
   String contentAlignment = 'center';
   String printColor = 'black';
+  String textEncoding = 'windows1256';
   String printRotation = '0';
   String commandType = 'auto';
   int textFontSize = 26;
@@ -169,7 +186,6 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     }
 
     _selectPdfFromIntent(pdf);
-    _showMessage(context, 'تم تحميل ملف PDF: ${pdf.name}');
   }
 
   void _selectPdfFromIntent(IncomingPdfIntent pdf) {
@@ -252,6 +268,13 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     return _allowedPrintColors.contains(normalized) ? normalized : 'black';
   }
 
+  String _validatedTextEncoding(String value) {
+    final normalized = value.trim().toLowerCase().replaceAll('-', '');
+    return _allowedTextEncodings.contains(normalized)
+        ? normalized
+        : 'windows1256';
+  }
+
   String _validatedPrintRotation(String value) {
     final normalized = value.trim();
     return _allowedPrintRotations.contains(normalized) ? normalized : '0';
@@ -300,6 +323,10 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
       default:
         return 'أسود';
     }
+  }
+
+  String _textEncodingLabel(String value) {
+    return value == 'cp864' ? 'CP864' : 'Windows-1256';
   }
 
   String _commandTypeLabel(String value) {
@@ -361,6 +388,9 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     final loadedPrintColor = _validatedPrintColor(
       prefs.getString(_printColorKey) ?? printColor,
     );
+    final loadedTextEncoding = _validatedTextEncoding(
+      prefs.getString(_textEncodingKey) ?? textEncoding,
+    );
     final loadedPrintRotation = _validatedPrintRotation(
       prefs.getString(_printRotationKey) ?? printRotation,
     );
@@ -399,6 +429,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
       fitMode = loadedFitMode;
       contentAlignment = loadedContentAlignment;
       printColor = loadedPrintColor;
+      textEncoding = loadedTextEncoding;
       printRotation = loadedPrintRotation;
       commandType = loadedCommandType;
       textFontSize = loadedTextFontSize;
@@ -431,6 +462,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
       prefs.setString(_fitModeKey, fitMode),
       prefs.setString(_contentAlignmentKey, contentAlignment),
       prefs.setString(_printColorKey, printColor),
+      prefs.setString(_textEncodingKey, textEncoding),
       prefs.setString(_printRotationKey, printRotation),
       prefs.setString(_commandTypeKey, commandType),
       prefs.setInt(_textFontSizeKey, textFontSize),
@@ -496,6 +528,231 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
       selectedPdfPath = file.path!;
       selectedPdfName = file.name;
     });
+  }
+
+  EscPosTextEncoding get _selectedEscPosTextEncoding {
+    return textEncoding == 'cp864'
+        ? EscPosTextEncoding.cp864
+        : EscPosTextEncoding.windows1256;
+  }
+
+  String _stripRedTags(String text) {
+    return text.replaceAll(RegExp(r'\[/?red\]', caseSensitive: false), '');
+  }
+
+  Future<void> _printBlackTextAsImage({
+    required String text,
+    required String normalizedMac,
+    required double selectedPaperWidth,
+  }) async {
+    await printTextAsRasterImage(
+      context: context,
+      text: text,
+      paperWidth: selectedPaperWidth,
+      mac: normalizedMac,
+      beepBefore: beepBefore,
+      beepAfter: beepAfter,
+      beepType: beepType,
+      autoCut: cutPaper,
+      feedLines: feedLines,
+      textBorder: textBorder,
+      fitMode: fitMode,
+      contentAlignment: contentAlignment,
+      commandType: 'esc',
+      printRotationDegrees: int.parse(printRotation),
+      textFontSize: textFontSize,
+      textFontFamily: textFontFamily,
+    );
+  }
+
+  Future<void> _printBlackPdf({
+    required String normalizedMac,
+    required double selectedPaperWidth,
+  }) async {
+    await printBluetoothPdfReceipt(
+      context: context,
+      pdfPath: selectedPdfPath!,
+      paperWidth: selectedPaperWidth,
+      mac: normalizedMac,
+      beepBefore: beepBefore,
+      beepAfter: beepAfter,
+      beepType: beepType,
+      autoCut: cutPaper,
+      feedLines: feedLines,
+      fitMode: fitMode,
+      contentAlignment: contentAlignment,
+      commandType: 'esc',
+      printColor: 'black',
+      printRotationDegrees: int.parse(printRotation),
+    );
+  }
+
+  Future<void> _handlePdfPrintByMode({
+    required PrintColorMode mode,
+    required String normalizedMac,
+    required double selectedPaperWidth,
+  }) async {
+    if (mode == PrintColorMode.black) {
+      await _printBlackPdf(
+        normalizedMac: normalizedMac,
+        selectedPaperWidth: selectedPaperWidth,
+      );
+      return;
+    }
+
+    final colorPrinted = await printPdfWithColorFallbackCommands(
+      context: context,
+      pdfPath: selectedPdfPath!,
+      paperWidth: selectedPaperWidth,
+      mac: normalizedMac,
+      beepBefore: beepBefore,
+      beepAfter: beepAfter,
+      beepType: beepType,
+      autoCut: cutPaper,
+      feedLines: feedLines,
+      fitMode: fitMode,
+      contentAlignment: contentAlignment,
+      commandType: 'esc',
+      printColor: mode == PrintColorMode.red ? 'red' : 'black_red',
+      printRotationDegrees: int.parse(printRotation),
+    );
+    if (!mounted) return;
+    if (colorPrinted) {
+      _showMessage(context, _messagePrintSuccess);
+      return;
+    }
+
+    _showMessage(
+      context,
+      mode == PrintColorMode.red
+          ? _messagePdfRedFallback
+          : _messagePdfColorFallback,
+    );
+    await _printBlackPdf(
+      normalizedMac: normalizedMac,
+      selectedPaperWidth: selectedPaperWidth,
+    );
+  }
+
+  Future<void> _handleTextPrintByMode({
+    required PrintColorMode mode,
+    required String text,
+    required String normalizedMac,
+    required double selectedPaperWidth,
+  }) async {
+    switch (mode) {
+      case PrintColorMode.black:
+        await _printBlackTextAsImage(
+          text: text,
+          normalizedMac: normalizedMac,
+          selectedPaperWidth: selectedPaperWidth,
+        );
+        return;
+      case PrintColorMode.red:
+        final redPrinted = await printRedTextWithFallbackCommands(
+          text: text,
+          mac: normalizedMac,
+          paperWidth: selectedPaperWidth,
+          textEncoding: _selectedEscPosTextEncoding,
+          beepBefore: beepBefore,
+          beepAfter: beepAfter,
+          beepType: beepType,
+          feedLines: feedLines,
+          autoCut: cutPaper,
+          textBorder: textBorder,
+          fitMode: fitMode,
+          contentAlignment: contentAlignment,
+          printerProfile: 'auto',
+          printRotationDegrees: int.parse(printRotation),
+          textFontSize: textFontSize,
+          textFontFamily: textFontFamily,
+        );
+        if (!mounted) return;
+        if (redPrinted) {
+          _showMessage(context, _messagePrintSuccess);
+          return;
+        }
+        _showMessage(context, _messageBlackRedFallback);
+        await _printBlackTextAsImage(
+          text: text,
+          normalizedMac: normalizedMac,
+          selectedPaperWidth: selectedPaperWidth,
+        );
+        return;
+      case PrintColorMode.blackAndRed:
+        final cleanFallbackText = _stripRedTags(text);
+        final mixedPrinted = await printMixedTextWithFallbackCommands(
+          parts: parseColoredTextParts(text),
+          mac: normalizedMac,
+          paperWidth: selectedPaperWidth,
+          textEncoding: _selectedEscPosTextEncoding,
+          beepBefore: beepBefore,
+          beepAfter: beepAfter,
+          beepType: beepType,
+          feedLines: feedLines,
+          autoCut: cutPaper,
+          textBorder: textBorder,
+          fitMode: fitMode,
+          contentAlignment: contentAlignment,
+          printerProfile: 'auto',
+          printRotationDegrees: int.parse(printRotation),
+          textFontSize: textFontSize,
+          textFontFamily: textFontFamily,
+        );
+        if (!mounted) return;
+        if (mixedPrinted) {
+          _showMessage(context, _messagePrintSuccess);
+          return;
+        }
+        _showMessage(context, _messageRedFallback);
+        await _printBlackTextAsImage(
+          text: cleanFallbackText,
+          normalizedMac: normalizedMac,
+          selectedPaperWidth: selectedPaperWidth,
+        );
+        return;
+    }
+  }
+
+  Future<void> _handlePrintPressed() async {
+    final normalizedMac = _normalizeMacAddress(macController.text);
+    if (normalizedMac.isEmpty) {
+      _showMessage(context, 'تعذر الاتصال بالطابعة');
+      return;
+    }
+    if (macController.text.trim() != normalizedMac) {
+      _updateSettings(() => macController.text = normalizedMac);
+    }
+
+    final selectedPaperWidth = _parsedPaperWidth();
+    if (selectedPaperWidth == null) {
+      _showMessage(context, 'تعذر الاتصال بالطابعة');
+      return;
+    }
+
+    final mode = printColorModeFromValue(printColor);
+
+    if (selectedPdfPath != null) {
+      await _handlePdfPrintByMode(
+        mode: mode,
+        normalizedMac: normalizedMac,
+        selectedPaperWidth: selectedPaperWidth,
+      );
+      return;
+    }
+
+    final text = textController.text.trim();
+    if (text.isEmpty) {
+      _showMessage(context, _messageTextRequired);
+      return;
+    }
+
+    await _handleTextPrintByMode(
+      mode: mode,
+      text: text,
+      normalizedMac: normalizedMac,
+      selectedPaperWidth: selectedPaperWidth,
+    );
   }
 
   @override
@@ -732,85 +989,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                               ),
                               icon: const Icon(Icons.print, size: 22),
                               label: const Text('طباعة'),
-                              onPressed: () async {
-                                final normalizedMac = _normalizeMacAddress(
-                                  macController.text,
-                                );
-                                if (normalizedMac.isEmpty) {
-                                  _showMessage(
-                                    context,
-                                    'يرجى إدخال عنوان MAC للطابعة',
-                                  );
-                                  return;
-                                }
-                                if (macController.text.trim() !=
-                                    normalizedMac) {
-                                  _updateSettings(
-                                    () => macController.text = normalizedMac,
-                                  );
-                                }
-
-                                final selectedPaperWidth = _parsedPaperWidth();
-                                if (selectedPaperWidth == null) {
-                                  _showMessage(
-                                    context,
-                                    'يرجى إدخال قيمة رقمية صحيحة للمقاس',
-                                  );
-                                  return;
-                                }
-
-                                if (selectedPdfPath != null) {
-                                  await printBluetoothPdfReceipt(
-                                    context: context,
-                                    pdfPath: selectedPdfPath!,
-                                    paperWidth: selectedPaperWidth,
-                                    mac: normalizedMac,
-                                    beepBefore: beepBefore,
-                                    beepAfter: beepAfter,
-                                    beepType: beepType,
-                                    autoCut: cutPaper,
-                                    feedLines: feedLines,
-                                    fitMode: fitMode,
-                                    contentAlignment: contentAlignment,
-                                    commandType: commandType,
-                                    printColor: printColor,
-                                    printRotationDegrees: int.parse(
-                                      printRotation,
-                                    ),
-                                  );
-                                  return;
-                                }
-
-                                if (textController.text.trim().isEmpty) {
-                                  _showMessage(
-                                    context,
-                                    'يرجى إدخال نص الطباعة أو اختيار ملف PDF',
-                                  );
-                                  return;
-                                }
-
-                                await printBluetoothReceipt(
-                                  context: context,
-                                  text: textController.text,
-                                  paperWidth: selectedPaperWidth,
-                                  mac: normalizedMac,
-                                  beepBefore: beepBefore,
-                                  beepAfter: beepAfter,
-                                  beepType: beepType,
-                                  autoCut: cutPaper,
-                                  feedLines: feedLines,
-                                  textBorder: textBorder,
-                                  fitMode: fitMode,
-                                  contentAlignment: contentAlignment,
-                                  commandType: commandType,
-                                  printColor: printColor,
-                                  printRotationDegrees: int.parse(
-                                    printRotation,
-                                  ),
-                                  textFontSize: textFontSize,
-                                  textFontFamily: textFontFamily,
-                                );
-                              },
+                              onPressed: _handlePrintPressed,
                             ),
                           ),
                         ],
@@ -911,6 +1090,25 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                           .toList(),
                       onChanged: (value) =>
                           _updateSettings(() => printColor = value!),
+                    ),
+                  ),
+                  _settingFieldRow(
+                    label: 'ترميز العربي',
+                    field: DropdownButtonFormField<String>(
+                      initialValue: textEncoding,
+                      isDense: true,
+                      isExpanded: true,
+                      decoration: _dropdownFieldDecoration(),
+                      items: _allowedTextEncodings
+                          .map(
+                            (value) => DropdownMenuItem(
+                              value: value,
+                              child: Text(_textEncodingLabel(value)),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) =>
+                          _updateSettings(() => textEncoding = value!),
                     ),
                   ),
                   _settingFieldRow(

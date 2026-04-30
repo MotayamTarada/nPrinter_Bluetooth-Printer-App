@@ -27,6 +27,7 @@ class MainActivity : FlutterActivity() {
   private val channelName = "com.example.nprinter_bluetooth_only/bluetooth_scan"
   private val pdfIntentChannelName = "com.example.nprinter_bluetooth_only/pdf_intent"
   private val printerStatusChannelName = "com.example.nprinter_bluetooth_only/printer_status"
+  private val gainschaColorChannelName = "com.example.nprinter_bluetooth_only/gainscha_b380_color"
   private val sppUuid = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
   private val handler = Handler(Looper.getMainLooper())
   private var scanReceiver: BroadcastReceiver? = null
@@ -91,6 +92,18 @@ class MainActivity : FlutterActivity() {
               val payload = checkEscPosStatus(macAddress)
               handler.post { result.success(payload) }
             }.start()
+          }
+          else -> result.notImplemented()
+        }
+      }
+
+    MethodChannel(flutterEngine.dartExecutor.binaryMessenger, gainschaColorChannelName)
+      .setMethodCallHandler { call: MethodCall, result: MethodChannel.Result ->
+        when (call.method) {
+          "printMonochromeLayer" -> {
+            // Official Gainscha B380 Android SDK is not bundled in this repository yet.
+            // Keep returning false so Flutter can fallback safely to black printing.
+            result.success(false)
           }
           else -> result.notImplemented()
         }

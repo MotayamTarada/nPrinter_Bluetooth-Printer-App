@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 
 class NPrinterLoadingPage extends StatelessWidget {
   const NPrinterLoadingPage({super.key});
