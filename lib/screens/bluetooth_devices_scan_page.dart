@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 
@@ -138,6 +139,18 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
     });
 
     try {
+      if (Platform.isIOS) {
+        final iosAdapterState = await _primeIosBluetoothPrompt();
+        if (iosAdapterState == BluetoothAdapterState.unauthorized) {
+          if (mounted) {
+            _showMessage(
+              'تم رفض إذن البلوتوث لهذا التطبيق على iPhone. فعّله من الإعدادات مرة واحدة.',
+            );
+          }
+          return;
+        }
+      }
+
       final hasPermissions = await _ensureBluetoothPermissions();
       if (!hasPermissions) {
         if (mounted) {
@@ -224,28 +237,59 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
     return byMac.values.toList();
   }
 
+  Future<BluetoothAdapterState?> _primeIosBluetoothPrompt() async {
+    if (!Platform.isIOS) {
+      return null;
+    }
+
+    try {
+      final supported = await FlutterBluePlus.isSupported;
+      if (!supported) {
+        return BluetoothAdapterState.unavailable;
+      }
+
+      // On iOS, the first call to FlutterBluePlus initializes CoreBluetooth
+      // and should trigger the Bluetooth permission prompt.
+      var state = await FlutterBluePlus.adapterState.first.timeout(
+        const Duration(seconds: 3),
+        onTimeout: () => BluetoothAdapterState.unknown,
+      );
+
+      if (state == BluetoothAdapterState.unknown) {
+        await Future<void>.delayed(const Duration(milliseconds: 700));
+      }
+
+      if (state == BluetoothAdapterState.unknown ||
+          state == BluetoothAdapterState.turningOn) {
+        try {
+          await FlutterBluePlus.startScan(timeout: const Duration(seconds: 1));
+        } catch (_) {
+          // Ignore. We only need to touch CoreBluetooth to trigger iOS prompt.
+        } finally {
+          try {
+            await FlutterBluePlus.stopScan();
+          } catch (_) {}
+        }
+      }
+
+      state = await FlutterBluePlus.adapterState.first.timeout(
+        const Duration(seconds: 2),
+        onTimeout: () => state,
+      );
+      return state;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<bool> _ensureBluetoothPermissions() async {
     if (Platform.isIOS) {
-      final currentStatus = await Permission.bluetooth.status;
-      if (currentStatus.isGranted || currentStatus.isLimited) {
-        return true;
-      }
-
-      final requested = await Permission.bluetooth.request();
-      if (requested.isGranted || requested.isLimited) {
-        return true;
-      }
-
-      if (mounted &&
-          (requested.isDenied ||
-              requested.isRestricted ||
-              requested.isPermanentlyDenied)) {
-        _showMessage(
-          'تم رفض صلاحية البلوتوث على iPhone. نظام iOS لا يسمح بمنح الإذن تلقائيًا بعد الرفض.',
-        );
-        return false;
-      }
-      return false;
+      // iOS Bluetooth access is handled by CoreBluetooth when the plugin is
+      // used (e.g. bluetoothEnabled / pairedBluetooths). Avoid blocking the
+      // flow here via permission_handler because it can report denied when the
+      // iOS macro integration is not enabled, even though the runtime prompt
+      // can still appear from the Bluetooth API call itself.
+      return true;
     }
 
     if (!Platform.isAndroid) {

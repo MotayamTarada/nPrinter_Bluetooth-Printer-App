@@ -7,6 +7,7 @@ import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:image/image.dart' as img;
 import 'package:pdfx/pdfx.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -23,13 +24,27 @@ Future<bool> requestBluetoothPermissions() async {
   }
 
   if (defaultTargetPlatform == TargetPlatform.iOS) {
-    final bluetoothStatus = await Permission.bluetooth.status;
-    if (bluetoothStatus.isGranted || bluetoothStatus.isLimited) {
+    try {
+      if (!await FlutterBluePlus.isSupported) {
+        return false;
+      }
+
+      // First call initializes CoreBluetooth and triggers iOS prompt.
+      var state = await FlutterBluePlus.adapterState.first;
+      if (state == BluetoothAdapterState.unknown) {
+        await Future<void>.delayed(const Duration(milliseconds: 700));
+        state = await FlutterBluePlus.adapterState.first;
+      }
+
+      if (state == BluetoothAdapterState.unauthorized ||
+          state == BluetoothAdapterState.unavailable) {
+        return false;
+      }
+      return true;
+    } catch (_) {
+      // Do not hard-fail iOS print path on transient state-read errors.
       return true;
     }
-
-    final requestedStatus = await Permission.bluetooth.request();
-    return requestedStatus.isGranted || requestedStatus.isLimited;
   }
 
   if (defaultTargetPlatform != TargetPlatform.android) {
