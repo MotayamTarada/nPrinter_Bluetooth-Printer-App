@@ -1,32 +1,14 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:permission_handler/permission_handler.dart';
 
+/// Opens a dialog, scans a barcode, and (optionally) writes it into [controller].
+/// Returns the scanned string (or null if canceled).
 Future<String?> scanBarcodeInDialog(
   BuildContext context, {
   TextEditingController? controller,
-  List<BarcodeFormat>? formats,
+  List<BarcodeFormat>?
+  formats, // e.g. [BarcodeFormat.ean13, BarcodeFormat.upcA]
 }) async {
-  final isSupported =
-      !kIsWeb &&
-      (defaultTargetPlatform == TargetPlatform.android ||
-          defaultTargetPlatform == TargetPlatform.iOS);
-  if (!isSupported) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('قارئ الباركود يعمل على Android و iOS فقط')),
-    );
-    return null;
-  }
-
-  final hasCameraPermission = await _ensureCameraPermission(context);
-  if (!hasCameraPermission) {
-    return null;
-  }
-  if (!context.mounted) {
-    return null;
-  }
-
   final result = await showDialog<String>(
     context: context,
     barrierDismissible: true,
@@ -39,66 +21,8 @@ Future<String?> scanBarcodeInDialog(
   return result;
 }
 
-Future<bool> _ensureCameraPermission(BuildContext context) async {
-  if (await Permission.camera.isGranted) {
-    return true;
-  }
-  if (!context.mounted) {
-    return false;
-  }
-
-  final allow = await showDialog<bool>(
-    context: context,
-    builder: (context) {
-      return AlertDialog(
-        title: const Text('صلاحية الكاميرا'),
-        content: const Text(
-          'لفتح قارئ الباركود نحتاج إذن استخدام الكاميرا داخل التطبيق.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('إلغاء'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('متابعة'),
-          ),
-        ],
-      );
-    },
-  );
-
-  if (allow != true) {
-    return false;
-  }
-  if (!context.mounted) {
-    return false;
-  }
-
-  final status = await Permission.camera.request();
-  if (status.isGranted || status.isLimited) {
-    return true;
-  }
-  if (!context.mounted) {
-    return false;
-  }
-
-  if (status.isPermanentlyDenied) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('صلاحية الكاميرا مرفوضة نهائيًا.')),
-    );
-  } else {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('لم يتم منح صلاحية الكاميرا')));
-  }
-  return false;
-}
-
 class _BarcodeScannerDialog extends StatefulWidget {
   const _BarcodeScannerDialog({this.formats});
-
   final List<BarcodeFormat>? formats;
 
   @override
@@ -137,7 +61,7 @@ class _BarcodeScannerDialogState extends State<_BarcodeScannerDialog> {
 
   @override
   Widget build(BuildContext context) {
-    const radius = 16.0;
+    final radius = 16.0;
     return Dialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       shape: RoundedRectangleBorder(
@@ -146,10 +70,11 @@ class _BarcodeScannerDialogState extends State<_BarcodeScannerDialog> {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(radius),
         child: AspectRatio(
-          aspectRatio: 3 / 4,
+          aspectRatio: 3 / 4, // nice camera shape inside dialog
           child: Stack(
             children: [
               MobileScanner(controller: _controller, onDetect: _onDetect),
+              // Top bar actions
               Positioned(
                 top: 8,
                 right: 8,
@@ -166,7 +91,7 @@ class _BarcodeScannerDialogState extends State<_BarcodeScannerDialog> {
                     ),
                     IconButton(
                       tooltip: 'Switch camera',
-                      onPressed: _controller.switchCamera,
+                      onPressed: () => _controller.switchCamera(),
                       icon: const Icon(Icons.cameraswitch),
                       color: Colors.white,
                     ),
@@ -179,6 +104,7 @@ class _BarcodeScannerDialogState extends State<_BarcodeScannerDialog> {
                   ],
                 ),
               ),
+              // Simple scan guide
               IgnorePointer(
                 child: Center(
                   child: Container(

@@ -32,6 +32,8 @@
 	<string>نستخدم البلوتوث للبحث عن الأجهزة القريبة والاتصال بها.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>نستخدم البلوتوث للبحث عن الأجهزة القريبة والاتصال بها.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>We use your location to scan for printers</string>
 	<key>NSCameraUsageDescription</key>
 	<string>nPrinter uses the camera to scan MAC/Barcode values.</string>
 	<key>NSLocalNetworkUsageDescription</key>
