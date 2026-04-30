@@ -349,11 +349,7 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
     }
 
     if (permanentlyDenied && mounted) {
-      await _showOpenSettingsDialog(
-        title: 'صلاحيات مرفوضة',
-        message:
-            'تم رفض بعض الصلاحيات نهائياً. يرجى تفعيلها من إعدادات الهاتف ثم العودة للتطبيق.',
-      );
+      _showMessage('تم رفض بعض صلاحيات البلوتوث نهائيًا.');
     }
     return false;
   }
@@ -383,34 +379,6 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
     );
 
     return result ?? false;
-  }
-
-  Future<void> _showOpenSettingsDialog({
-    required String title,
-    required String message,
-  }) async {
-    await showDialog<void>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text(title),
-          content: Text(message),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('لاحقاً'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                Navigator.pop(context);
-                await openAppSettings();
-              },
-              child: const Text('فتح الإعدادات'),
-            ),
-          ],
-        );
-      },
-    );
   }
 
   Future<String?> _askPairPin(BluetoothInfo device) async {
