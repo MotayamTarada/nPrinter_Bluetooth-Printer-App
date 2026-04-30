@@ -28,10 +28,14 @@
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>nPrinter needs Bluetooth access to connect to your printer.</string>
+	<key>NSBluetoothCentralUsageDescription</key>
+	<string>nPrinter needs Bluetooth access to discover and connect to your printer.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>nPrinter needs Bluetooth access to connect to your printer.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>nPrinter uses the camera to scan MAC/Barcode values.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>nPrinter uses local network to discover nearby printers.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
