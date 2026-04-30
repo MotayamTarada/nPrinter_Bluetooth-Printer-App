@@ -143,9 +143,7 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
         final iosAdapterState = await _primeIosBluetoothPrompt();
         if (iosAdapterState == BluetoothAdapterState.unauthorized) {
           if (mounted) {
-            _showMessage(
-              'تم رفض إذن البلوتوث لهذا التطبيق على iPhone. فعّله من الإعدادات مرة واحدة.',
-            );
+            _showMessage('تم رفض إذن البلوتوث لهذا التطبيق على iPhone.');
           }
           return;
         }

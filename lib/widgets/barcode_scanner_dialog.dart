@@ -86,13 +86,8 @@ Future<bool> _ensureCameraPermission(BuildContext context) async {
 
   if (status.isPermanentlyDenied) {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'صلاحية الكاميرا مرفوضة نهائيًا. افتح الإعدادات للسماح بها.',
-        ),
-      ),
+      const SnackBar(content: Text('صلاحية الكاميرا مرفوضة نهائيًا.')),
     );
-    await openAppSettings();
   } else {
     ScaffoldMessenger.of(
       context,
