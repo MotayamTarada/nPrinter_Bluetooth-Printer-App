@@ -226,39 +226,26 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
 
   Future<bool> _ensureBluetoothPermissions() async {
     if (Platform.isIOS) {
-      final bluetooth = await Permission.bluetooth.status;
-      if (bluetooth.isGranted || bluetooth.isLimited) {
+      final currentStatus = await Permission.bluetooth.status;
+      if (currentStatus.isGranted || currentStatus.isLimited) {
         return true;
       }
-      if ((bluetooth.isPermanentlyDenied || bluetooth.isRestricted) &&
-          mounted) {
-        await _showOpenSettingsDialog(
-          title: 'Bluetooth Permission',
-          message:
-              'Bluetooth access is blocked on this iPhone. Please allow it from Settings, then return to the app.',
-        );
-        return false;
-      }
-      if (mounted) {
-        final continueRequest = await _showPermissionRationaleDialog(
-          title: 'صلاحية البلوتوث',
-          message:
-              'حتى نعرض الأجهزة القريبة والمقترنة، نحتاج إذن الوصول إلى البلوتوث.',
-        );
-        if (!continueRequest) {
-          return false;
-        }
-      }
+
       final requested = await Permission.bluetooth.request();
-      if (!requested.isGranted && !requested.isLimited && mounted) {
-        await _showOpenSettingsDialog(
-          title: 'صلاحية مرفوضة',
-          message:
-              'تم رفض صلاحية البلوتوث. يرجى تفعيلها من إعدادات الهاتف (Settings) ثم العودة.',
+      if (requested.isGranted || requested.isLimited) {
+        return true;
+      }
+
+      if (mounted &&
+          (requested.isDenied ||
+              requested.isRestricted ||
+              requested.isPermanentlyDenied)) {
+        _showMessage(
+          'تم رفض صلاحية البلوتوث على iPhone. نظام iOS لا يسمح بمنح الإذن تلقائيًا بعد الرفض.',
         );
         return false;
       }
-      return requested.isGranted || requested.isLimited;
+      return false;
     }
 
     if (!Platform.isAndroid) {
