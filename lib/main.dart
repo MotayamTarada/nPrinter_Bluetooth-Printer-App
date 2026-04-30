@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'screens/bluetooth_printer_home_page.dart';
 import 'screens/nprinter_loading_page.dart';
+import 'services/bluetooth_printer_service.dart';
 
 void main() {
   runApp(const NPrinterBluetoothOnlyApp());
@@ -41,6 +42,13 @@ class _AppEntryPointState extends State<_AppEntryPoint> {
   @override
   void initState() {
     super.initState();
+    _requestPermissionsAndShowApp();
+  }
+
+  Future<void> _requestPermissionsAndShowApp() async {
+    // Request Bluetooth permissions during loading screen
+    await requestBluetoothPermissions();
+
     _timer = Timer(const Duration(seconds: 3), () {
       if (!mounted) {
         return;
