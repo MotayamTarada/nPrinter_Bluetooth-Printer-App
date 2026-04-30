@@ -2,11 +2,10 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 
 import '../services/android_bluetooth_discovery_service.dart';
+import '../services/bluetooth_permission_service.dart';
 
 class BluetoothDevicesScanPage extends StatefulWidget {
   const BluetoothDevicesScanPage({super.key});
@@ -139,17 +138,8 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
     });
 
     try {
-      if (Platform.isIOS) {
-        final iosAdapterState = await _primeIosBluetoothPrompt();
-        if (iosAdapterState == BluetoothAdapterState.unauthorized) {
-          if (mounted) {
-            _showMessage('تم رفض إذن البلوتوث لهذا التطبيق على iPhone.');
-          }
-          return;
-        }
-      }
-
-      final hasPermissions = await _ensureBluetoothPermissions();
+      final hasPermissions =
+          await BluetoothPermissionService.ensureBluetoothPermission();
       if (!hasPermissions) {
         if (mounted) {
           _showMessage('لم يتم منح صلاحيات البلوتوث المطلوبة.');
@@ -235,150 +225,6 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
     return byMac.values.toList();
   }
 
-  Future<BluetoothAdapterState?> _primeIosBluetoothPrompt() async {
-    if (!Platform.isIOS) {
-      return null;
-    }
-
-    try {
-      final supported = await FlutterBluePlus.isSupported;
-      if (!supported) {
-        return BluetoothAdapterState.unavailable;
-      }
-
-      // On iOS, the first call to FlutterBluePlus initializes CoreBluetooth
-      // and should trigger the Bluetooth permission prompt.
-      var state = await FlutterBluePlus.adapterState.first.timeout(
-        const Duration(seconds: 3),
-        onTimeout: () => BluetoothAdapterState.unknown,
-      );
-
-      if (state == BluetoothAdapterState.unknown) {
-        await Future<void>.delayed(const Duration(milliseconds: 700));
-      }
-
-      if (state == BluetoothAdapterState.unknown ||
-          state == BluetoothAdapterState.turningOn) {
-        try {
-          await FlutterBluePlus.startScan(timeout: const Duration(seconds: 1));
-        } catch (_) {
-          // Ignore. We only need to touch CoreBluetooth to trigger iOS prompt.
-        } finally {
-          try {
-            await FlutterBluePlus.stopScan();
-          } catch (_) {}
-        }
-      }
-
-      state = await FlutterBluePlus.adapterState.first.timeout(
-        const Duration(seconds: 2),
-        onTimeout: () => state,
-      );
-      return state;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<bool> _ensureBluetoothPermissions() async {
-    if (Platform.isIOS) {
-      // iOS Bluetooth access is handled by CoreBluetooth when the plugin is
-      // used (e.g. bluetoothEnabled / pairedBluetooths). Avoid blocking the
-      // flow here via permission_handler because it can report denied when the
-      // iOS macro integration is not enabled, even though the runtime prompt
-      // can still appear from the Bluetooth API call itself.
-      return true;
-    }
-
-    if (!Platform.isAndroid) {
-      return true;
-    }
-
-    final sdkInt = await AndroidBluetoothDiscoveryService.androidSdkInt();
-    final isAndroid12OrHigher = sdkInt >= 31 || sdkInt == 0;
-
-    final requiredPerms = isAndroid12OrHigher
-        ? [Permission.bluetoothScan, Permission.bluetoothConnect]
-        : [Permission.locationWhenInUse];
-    final requestPerms = <Permission>[
-      ...requiredPerms,
-      if (isAndroid12OrHigher) Permission.locationWhenInUse,
-    ];
-
-    bool allGranted = true;
-    for (final perm in requiredPerms) {
-      if (!(await perm.status.isGranted)) {
-        allGranted = false;
-        break;
-      }
-    }
-
-    if (allGranted) {
-      return true;
-    }
-
-    if (mounted) {
-      final continueRequest = await _showPermissionRationaleDialog(
-        title: 'صلاحيات البلوتوث',
-        message:
-            'لإظهار الأجهزة القريبة وعمل الاقتران داخل التطبيق، يرجى منح صلاحيات البلوتوث (والموقع إذا لزم الأمر).',
-      );
-      if (!continueRequest) {
-        return false;
-      }
-    }
-
-    final requested = await requestPerms.request();
-
-    bool grantedNow = true;
-    bool permanentlyDenied = false;
-    for (final perm in requiredPerms) {
-      final status = requested[perm] ?? await perm.status;
-      if (!status.isGranted) {
-        grantedNow = false;
-        if (status.isPermanentlyDenied) {
-          permanentlyDenied = true;
-        }
-      }
-    }
-
-    if (grantedNow) {
-      return true;
-    }
-
-    if (permanentlyDenied && mounted) {
-      _showMessage('تم رفض بعض صلاحيات البلوتوث نهائيًا.');
-    }
-    return false;
-  }
-
-  Future<bool> _showPermissionRationaleDialog({
-    required String title,
-    required String message,
-  }) async {
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text(title),
-          content: Text(message),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('إلغاء'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('متابعة'),
-            ),
-          ],
-        );
-      },
-    );
-
-    return result ?? false;
-  }
-
   Future<String?> _askPairPin(BluetoothInfo device) async {
     final controller = TextEditingController(text: '0000');
     final pin = await showDialog<String>(
@@ -438,7 +284,8 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
       return;
     }
 
-    final hasPermissions = await _ensureBluetoothPermissions();
+    final hasPermissions =
+        await BluetoothPermissionService.ensureBluetoothPermission();
     if (!hasPermissions) {
       _showMessage('لم يتم منح الصلاحيات اللازمة للاقتران.');
       return;

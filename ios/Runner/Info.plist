@@ -27,11 +27,11 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>nPrinter needs Bluetooth access to connect to your printer.</string>
+	<string>نستخدم البلوتوث للبحث عن الأجهزة القريبة والاتصال بها.</string>
 	<key>NSBluetoothCentralUsageDescription</key>
-	<string>nPrinter needs Bluetooth access to discover and connect to your printer.</string>
+	<string>نستخدم البلوتوث للبحث عن الأجهزة القريبة والاتصال بها.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>nPrinter needs Bluetooth access to connect to your printer.</string>
+	<string>نستخدم البلوتوث للبحث عن الأجهزة القريبة والاتصال بها.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>nPrinter uses the camera to scan MAC/Barcode values.</string>
 	<key>NSLocalNetworkUsageDescription</key>

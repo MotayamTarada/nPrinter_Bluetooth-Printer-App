@@ -7,77 +7,18 @@ import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:image/image.dart' as img;
 import 'package:pdfx/pdfx.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'bluetooth_permission_service.dart';
 import 'esc_pos_colored_text_service.dart';
 import 'generate_image_service.dart';
 import 'printer_status_service.dart';
 
 Future<bool> requestBluetoothPermissions() async {
-  if (kIsWeb) {
-    return true;
-  }
-
-  if (defaultTargetPlatform == TargetPlatform.iOS) {
-    try {
-      if (!await FlutterBluePlus.isSupported) {
-        return false;
-      }
-
-      // First call initializes CoreBluetooth and triggers iOS prompt.
-      var state = await FlutterBluePlus.adapterState.first;
-      if (state == BluetoothAdapterState.unknown) {
-        await Future<void>.delayed(const Duration(milliseconds: 700));
-        state = await FlutterBluePlus.adapterState.first;
-      }
-
-      if (state == BluetoothAdapterState.unauthorized ||
-          state == BluetoothAdapterState.unavailable) {
-        return false;
-      }
-      return true;
-    } catch (_) {
-      // Do not hard-fail iOS print path on transient state-read errors.
-      return true;
-    }
-  }
-
-  if (defaultTargetPlatform != TargetPlatform.android) {
-    return true;
-  }
-
-  final requiredPermissions = <Permission>[
-    Permission.bluetoothConnect,
-    Permission.bluetoothScan,
-    Permission.locationWhenInUse,
-  ];
-
-  var alreadyGranted = true;
-  for (final permission in requiredPermissions) {
-    final status = await permission.status;
-    if (!status.isGranted && !status.isLimited) {
-      alreadyGranted = false;
-      break;
-    }
-  }
-  if (alreadyGranted) {
-    return true;
-  }
-
-  final requestedPermissions = await requiredPermissions.request();
-  for (final permission in requiredPermissions) {
-    final status = requestedPermissions[permission] ?? await permission.status;
-    if (!status.isGranted && !status.isLimited) {
-      return false;
-    }
-  }
-
-  return true;
+  return BluetoothPermissionService.ensureBluetoothPermission();
 }
 
 PaperSize _resolvePaperSize(double paperWidthMm) {
