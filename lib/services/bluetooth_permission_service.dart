@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import 'android_bluetooth_discovery_service.dart';
+
 class BluetoothPermissionService {
   BluetoothPermissionService._();
 
@@ -23,48 +25,70 @@ class BluetoothPermissionService {
   }
 
   static Future<bool> _ensureIosPermission() async {
-    final bluetoothPermission = Permission.bluetooth;
-    var status = await bluetoothPermission.status;
-    if (status == PermissionStatus.granted) {
+    var bluetoothStatus = await Permission.bluetooth.status;
+    if (bluetoothStatus == PermissionStatus.granted) {
       return true;
     }
 
-    if (status == PermissionStatus.restricted ||
-        status == PermissionStatus.permanentlyDenied) {
+    if (bluetoothStatus == PermissionStatus.restricted ||
+        bluetoothStatus == PermissionStatus.permanentlyDenied) {
+      await openAppSettings();
       return false;
     }
 
-    status = await bluetoothPermission.request();
-    if (status == PermissionStatus.granted) {
+    bluetoothStatus = await Permission.bluetooth.request();
+    if (bluetoothStatus == PermissionStatus.granted) {
       return true;
     }
 
-    // Fallback: بعض إصدارات iOS/SDK تُرجع الحالة عبر bluetoothConnect.
     final connectStatus = await Permission.bluetoothConnect.request();
     if (connectStatus == PermissionStatus.granted) {
       return true;
+    }
+
+    if (bluetoothStatus == PermissionStatus.permanentlyDenied ||
+        connectStatus == PermissionStatus.permanentlyDenied) {
+      await openAppSettings();
     }
 
     return false;
   }
 
   static Future<bool> _ensureAndroidPermission() async {
-    final statuses = await [
-      Permission.location,
-      Permission.bluetooth,
-      Permission.bluetoothScan,
-      Permission.bluetoothConnect,
-    ].request();
+    final sdkInt = await AndroidBluetoothDiscoveryService.androidSdkInt();
 
-    if (statuses[Permission.location] != PermissionStatus.granted) {
-      return false;
+    if (sdkInt >= 31) {
+      final statuses = await <Permission>[
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+      ].request();
+
+      final scanStatus = statuses[Permission.bluetoothScan] ?? PermissionStatus.denied;
+      final connectStatus =
+          statuses[Permission.bluetoothConnect] ?? PermissionStatus.denied;
+
+      final granted =
+          scanStatus == PermissionStatus.granted &&
+          connectStatus == PermissionStatus.granted;
+
+      if (!granted &&
+          (scanStatus == PermissionStatus.permanentlyDenied ||
+              connectStatus == PermissionStatus.permanentlyDenied)) {
+        await openAppSettings();
+      }
+
+      return granted;
     }
 
-    if (await Permission.location.serviceStatus.isDisabled) {
-      return false;
+    final locationStatus = await Permission.locationWhenInUse.request();
+    if (locationStatus == PermissionStatus.granted) {
+      return true;
     }
 
-    return statuses[Permission.bluetoothScan] == PermissionStatus.granted &&
-        statuses[Permission.bluetoothConnect] == PermissionStatus.granted;
+    if (locationStatus == PermissionStatus.permanentlyDenied) {
+      await openAppSettings();
+    }
+
+    return false;
   }
 }
