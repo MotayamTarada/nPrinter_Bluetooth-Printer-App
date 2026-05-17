@@ -99,18 +99,25 @@ target 'Runner' do
 end
 
 post_install do |installer|
+  permission_macros = [
+    'PERMISSION_BLUETOOTH=1',
+    'PERMISSION_LOCATION=1',
+    'PERMISSION_CAMERA=1',
+  ]
+
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
 
     target.build_configurations.each do |config|
-      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
-        '$(inherited)',
+      definitions = config.build_settings['GCC_PREPROCESSOR_DEFINITIONS']
+      definitions = ['$(inherited)'] if definitions.nil?
+      definitions = [definitions] if definitions.is_a?(String)
 
-        # permission_handler iOS permissions used by this app
-        'PERMISSION_BLUETOOTH=1',
-        'PERMISSION_LOCATION=1',
-        'PERMISSION_CAMERA=1',
-      ]
+      permission_macros.each do |macro|
+        definitions << macro unless definitions.include?(macro)
+      end
+
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] = definitions
     end
   end
 end 
