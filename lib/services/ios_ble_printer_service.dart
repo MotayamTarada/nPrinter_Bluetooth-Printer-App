@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class IosBleDiscoveredPrinter {
   const IosBleDiscoveredPrinter({
@@ -16,6 +18,20 @@ class IosBleDiscoveredPrinter {
   final List<String> advertisedServiceUuids;
 }
 
+class IosBleScanOutcome {
+  const IosBleScanOutcome({
+    required this.printers,
+    required this.permissionBefore,
+    required this.permissionAfterRequest,
+    required this.permissionAfterScan,
+  });
+
+  final List<IosBleDiscoveredPrinter> printers;
+  final PermissionStatus permissionBefore;
+  final PermissionStatus permissionAfterRequest;
+  final PermissionStatus permissionAfterScan;
+}
+
 class IosBlePrinterService {
   IosBlePrinterService._();
 
@@ -25,6 +41,8 @@ class IosBlePrinterService {
   static const String _primaryCharacteristicUuid = 'FFF2';
   static const String _secondaryServiceUuid = '18F0';
   static const String _secondaryCharacteristicUuid = '2AF1';
+  static const MethodChannel _iosBluetoothPermissionWarmupChannel =
+      MethodChannel('ios_bluetooth_permission_warmup');
   static const int _defaultChunkSize = 180;
   static const Duration _defaultChunkDelay = Duration(milliseconds: 20);
 
@@ -84,6 +102,62 @@ class IosBlePrinterService {
     return byName || byService;
   }
 
+  static Future<void> _warmUpNativeCoreBluetooth() async {
+    try {
+      await _iosBluetoothPermissionWarmupChannel.invokeMethod<void>(
+        'warmUpBluetoothPermission',
+      );
+    } catch (_) {
+      // Best effort warm-up.
+    }
+  }
+
+  static Future<IosBleScanOutcome> startIosBleScanForPermissionAndPrinters() async {
+    if (!_isIos) {
+      return const IosBleScanOutcome(
+        printers: <IosBleDiscoveredPrinter>[],
+        permissionBefore: PermissionStatus.granted,
+        permissionAfterRequest: PermissionStatus.granted,
+        permissionAfterScan: PermissionStatus.granted,
+      );
+    }
+
+    debugPrint('[iOS BLE] refresh pressed');
+    final permissionBefore = await Permission.bluetooth.status;
+    debugPrint('[iOS BLE] permission before = $permissionBefore');
+
+    final permissionAfterRequest = await Permission.bluetooth.request();
+    debugPrint('[iOS BLE] permission after request = $permissionAfterRequest');
+
+    if (permissionAfterRequest.isPermanentlyDenied ||
+        permissionAfterRequest.isRestricted) {
+      await openAppSettings();
+      return IosBleScanOutcome(
+        printers: const <IosBleDiscoveredPrinter>[],
+        permissionBefore: permissionBefore,
+        permissionAfterRequest: permissionAfterRequest,
+        permissionAfterScan: permissionAfterRequest,
+      );
+    }
+
+    await _warmUpNativeCoreBluetooth();
+    final printers = await scanForPrinters(timeout: const Duration(seconds: 8));
+    final permissionAfterScan = await Permission.bluetooth.status;
+    debugPrint('[iOS BLE] permission after scan = $permissionAfterScan');
+
+    if (permissionAfterScan.isPermanentlyDenied ||
+        permissionAfterScan.isRestricted) {
+      await openAppSettings();
+    }
+
+    return IosBleScanOutcome(
+      printers: printers,
+      permissionBefore: permissionBefore,
+      permissionAfterRequest: permissionAfterRequest,
+      permissionAfterScan: permissionAfterScan,
+    );
+  }
+
   static Future<List<IosBleDiscoveredPrinter>> scanForPrinters({
     Duration timeout = const Duration(seconds: 8),
   }) async {
@@ -95,10 +169,9 @@ class IosBlePrinterService {
     StreamSubscription<List<ScanResult>>? subscription;
 
     try {
-      debugPrint('iOS BLE scan started timeout=${timeout.inSeconds}s');
+      debugPrint('[iOS BLE] starting scan');
       subscription = FlutterBluePlus.scanResults.listen(
         (results) {
-          debugPrint('iOS BLE scanResults update count=${results.length}');
           for (final result in results) {
             final id = _deviceId(result.device);
             final name = _bestDeviceName(result);
@@ -111,8 +184,8 @@ class IosBlePrinterService {
             );
 
             debugPrint(
-              'iOS BLE scan device name="$name" id="$id" '
-              'services=$serviceUuids rssi=${result.rssi} isTarget=$isTarget',
+              '[iOS BLE] result name=$name remoteId=$id '
+              'services=$serviceUuids rssi=${result.rssi}',
             );
 
             _knownDevicesById[id] = result.device;
@@ -136,16 +209,15 @@ class IosBlePrinterService {
       await FlutterBluePlus.startScan(timeout: timeout);
       await Future<void>.delayed(timeout + const Duration(milliseconds: 200));
     } catch (e, stackTrace) {
-      debugPrint('iOS BLE startScan exception: $e');
+      debugPrint('[iOS BLE] scan exception: $e');
       debugPrint(stackTrace.toString());
     } finally {
       try {
         await FlutterBluePlus.stopScan();
       } catch (_) {}
       await subscription?.cancel();
-      debugPrint(
-        'iOS BLE scan ended matchedCount=${discoveredById.length}',
-      );
+      debugPrint('[iOS BLE] scan finished');
+      debugPrint('[iOS BLE] scan result count = ${discoveredById.length}');
     }
 
     final printers = discoveredById.values.toList(growable: false);

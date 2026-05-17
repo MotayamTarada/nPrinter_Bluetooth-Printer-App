@@ -143,45 +143,43 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
     });
 
     try {
-      final hasPermissions =
-          await BluetoothPermissionService.ensureBluetoothPermission();
       List<BluetoothInfo> pairedDevices = <BluetoothInfo>[];
-
-      if (!hasPermissions && defaultTargetPlatform != TargetPlatform.iOS) {
-        if (mounted) {
-          _showMessage('لم يتم منح صلاحيات البلوتوث المطلوبة.');
-        }
-        return;
-      }
-      if (!hasPermissions && defaultTargetPlatform == TargetPlatform.iOS) {
-        debugPrint(
-          'iOS BLE: permission not granted yet, proceeding with scan to trigger CoreBluetooth flow.',
-        );
-      }
-
-      final isBluetoothOn = await PrintBluetoothThermal.bluetoothEnabled;
-      if (!isBluetoothOn && defaultTargetPlatform == TargetPlatform.android) {
-        if (mounted) {
-          _showMessage('يرجى تشغيل البلوتوث ثم إعادة المحاولة.');
-        }
-        return;
-      }
-
       List<BluetoothInfo> nearbyDevices = <BluetoothInfo>[];
+
       if (defaultTargetPlatform == TargetPlatform.iOS) {
-        final iosDiscovered = await IosBlePrinterService.scanForPrinters(
-          timeout: const Duration(seconds: 8),
-        );
-        pairedDevices = iosDiscovered
+        final scanOutcome =
+            await IosBlePrinterService.startIosBleScanForPermissionAndPrinters();
+        pairedDevices = scanOutcome.printers
             .map(
               (device) =>
                   BluetoothInfo(name: device.name, macAdress: device.id),
             )
             .toList(growable: false);
-      } else {
-        if (pairedDevices.isEmpty) {
-          pairedDevices = await PrintBluetoothThermal.pairedBluetooths;
+
+        if (pairedDevices.isEmpty &&
+            !scanOutcome.permissionAfterScan.isGranted &&
+            mounted) {
+          _showMessage('Bluetooth permission is not granted on iOS.');
         }
+      } else {
+        final hasPermissions =
+            await BluetoothPermissionService.ensureBluetoothPermission();
+        if (!hasPermissions) {
+          if (mounted) {
+            _showMessage('Bluetooth permission is required.');
+          }
+          return;
+        }
+
+        final isBluetoothOn = await PrintBluetoothThermal.bluetoothEnabled;
+        if (!isBluetoothOn) {
+          if (mounted) {
+            _showMessage('Please enable Bluetooth then try again.');
+          }
+          return;
+        }
+
+        pairedDevices = await PrintBluetoothThermal.pairedBluetooths;
       }
 
       final normalizedPaired = _deduplicateDevices(pairedDevices);
@@ -593,3 +591,4 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 }
+
