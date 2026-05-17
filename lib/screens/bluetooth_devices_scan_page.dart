@@ -148,7 +148,7 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
       }
 
       final isBluetoothOn = await PrintBluetoothThermal.bluetoothEnabled;
-      if (!isBluetoothOn) {
+      if (!isBluetoothOn && defaultTargetPlatform == TargetPlatform.android) {
         if (mounted) {
           _showMessage('يرجى تشغيل البلوتوث ثم إعادة المحاولة.');
         }

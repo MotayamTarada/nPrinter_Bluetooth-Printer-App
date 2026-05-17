@@ -51,7 +51,7 @@ class BluetoothPermissionService {
       if (refreshedStatus == PermissionStatus.permanentlyDenied ||
           refreshedStatus == PermissionStatus.restricted) {
         await openAppSettings();
-        return false;
+        return true;
       }
       return true;
     }
@@ -61,7 +61,7 @@ class BluetoothPermissionService {
       await openAppSettings();
     }
 
-    return false;
+    return true;
   }
 
   static Future<bool> _ensureAndroidPermission() async {
