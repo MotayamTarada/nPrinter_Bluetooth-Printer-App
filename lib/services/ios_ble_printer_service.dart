@@ -85,7 +85,7 @@ class IosBlePrinterService {
   }
 
   static Future<List<IosBleDiscoveredPrinter>> scanForPrinters({
-    Duration timeout = const Duration(seconds: 4),
+    Duration timeout = const Duration(seconds: 8),
   }) async {
     if (!_isIos) {
       return const <IosBleDiscoveredPrinter>[];
@@ -95,8 +95,10 @@ class IosBlePrinterService {
     StreamSubscription<List<ScanResult>>? subscription;
 
     try {
+      debugPrint('iOS BLE scan started timeout=${timeout.inSeconds}s');
       subscription = FlutterBluePlus.scanResults.listen(
         (results) {
+          debugPrint('iOS BLE scanResults update count=${results.length}');
           for (final result in results) {
             final id = _deviceId(result.device);
             final name = _bestDeviceName(result);
@@ -110,7 +112,7 @@ class IosBlePrinterService {
 
             debugPrint(
               'iOS BLE scan device name="$name" id="$id" '
-              'services=$serviceUuids isTarget=$isTarget',
+              'services=$serviceUuids rssi=${result.rssi} isTarget=$isTarget',
             );
 
             _knownDevicesById[id] = result.device;
@@ -141,6 +143,9 @@ class IosBlePrinterService {
         await FlutterBluePlus.stopScan();
       } catch (_) {}
       await subscription?.cancel();
+      debugPrint(
+        'iOS BLE scan ended matchedCount=${discoveredById.length}',
+      );
     }
 
     final printers = discoveredById.values.toList(growable: false);
@@ -257,7 +262,10 @@ class IosBlePrinterService {
     _connectedDeviceId = normalizedId;
     _writeCharacteristic = selected;
 
-    final selectedServiceUuid = _normalizeUuid(selected.serviceUuid.toString());
+    final selectedServiceUuid = _selectedServiceUuid(
+      selected: selected,
+      services: services,
+    );
     final selectedCharUuid = _normalizeUuid(selected.uuid.toString());
     final p = selected.properties;
     debugPrint(
@@ -266,6 +274,24 @@ class IosBlePrinterService {
       'writeWithoutResponse=${p.writeWithoutResponse}',
     );
     return true;
+  }
+
+  static String _selectedServiceUuid({
+    required BluetoothCharacteristic selected,
+    required List<BluetoothService> services,
+  }) {
+    for (final service in services) {
+      final serviceUuid = _normalizeUuid(service.uuid.toString());
+      for (final characteristic in service.characteristics) {
+        final sameUuid =
+            _normalizeUuid(characteristic.uuid.toString()) ==
+            _normalizeUuid(selected.uuid.toString());
+        if (sameUuid) {
+          return serviceUuid;
+        }
+      }
+    }
+    return 'UNKNOWN';
   }
 
   static BluetoothCharacteristic? _findPreferredCharacteristic(

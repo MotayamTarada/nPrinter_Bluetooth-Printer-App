@@ -35,7 +35,6 @@ class BluetoothPermissionService {
     }
 
     if (status.isRestricted || status.isPermanentlyDenied) {
-      await openAppSettings();
       return false;
     }
 
@@ -44,7 +43,6 @@ class BluetoothPermissionService {
       return true;
     }
     if (status.isRestricted || status.isPermanentlyDenied) {
-      await openAppSettings();
       return false;
     }
 
@@ -56,7 +54,7 @@ class BluetoothPermissionService {
     }
 
     if (status.isRestricted || status.isPermanentlyDenied) {
-      await openAppSettings();
+      return false;
     }
 
     return false;

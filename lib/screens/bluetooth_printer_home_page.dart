@@ -488,6 +488,16 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
       return '';
     }
 
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      final macLike = RegExp(
+        r'^([0-9A-Fa-f]{2}[-:]){5}[0-9A-Fa-f]{2}$',
+      ).hasMatch(trimmed);
+      if (!macLike) {
+        // Keep BLE remoteId/UUID format on iOS; do not rewrite '-' to ':'.
+        return trimmed.toUpperCase();
+      }
+    }
+
     final separatedMatch = RegExp(
       r'([0-9A-Fa-f]{2}[-:]){5}[0-9A-Fa-f]{2}',
     ).firstMatch(trimmed);

@@ -171,7 +171,7 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
       List<BluetoothInfo> nearbyDevices = <BluetoothInfo>[];
       if (defaultTargetPlatform == TargetPlatform.iOS) {
         final iosDiscovered = await IosBlePrinterService.scanForPrinters(
-          timeout: const Duration(seconds: 6),
+          timeout: const Duration(seconds: 8),
         );
         pairedDevices = iosDiscovered
             .map(
