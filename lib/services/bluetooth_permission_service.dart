@@ -25,18 +25,7 @@ class BluetoothPermissionService {
   }
 
   static Future<bool> _ensureIosPermission() async {
-    var status = await Permission.bluetooth.status;
-
-    if (status.isGranted) {
-      return true;
-    }
-
-    if (status.isRestricted || status.isPermanentlyDenied) {
-      await openAppSettings();
-      return false;
-    }
-
-    status = await Permission.bluetooth.request();
+    final status = await Permission.bluetooth.request();
 
     if (status.isGranted) {
       return true;

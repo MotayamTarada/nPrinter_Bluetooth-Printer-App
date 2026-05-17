@@ -142,24 +142,14 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
       final hasPermissions =
           await BluetoothPermissionService.ensureBluetoothPermission();
       List<BluetoothInfo> pairedDevices = <BluetoothInfo>[];
-      if (!hasPermissions && defaultTargetPlatform == TargetPlatform.iOS) {
-        try {
-          pairedDevices = await PrintBluetoothThermal.pairedBluetooths;
-        } catch (_) {
-          pairedDevices = <BluetoothInfo>[];
-        }
-
-        final status = await Permission.bluetooth.status;
-        if (status.isPermanentlyDenied || status.isRestricted) {
-          await openAppSettings();
-          return;
-        }
-      }
 
       if (!hasPermissions && defaultTargetPlatform != TargetPlatform.iOS) {
         if (mounted) {
           _showMessage('لم يتم منح صلاحيات البلوتوث المطلوبة.');
         }
+        return;
+      }
+      if (!hasPermissions && defaultTargetPlatform == TargetPlatform.iOS) {
         return;
       }
 
@@ -172,6 +162,16 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
       }
 
       if (pairedDevices.isEmpty) {
+        if (defaultTargetPlatform == TargetPlatform.iOS) {
+          final status = await Permission.bluetooth.request();
+          if (status.isPermanentlyDenied || status.isRestricted) {
+            await openAppSettings();
+            return;
+          }
+          if (!status.isGranted) {
+            return;
+          }
+        }
         pairedDevices = await PrintBluetoothThermal.pairedBluetooths;
       }
       final normalizedPaired = _deduplicateDevices(pairedDevices);
