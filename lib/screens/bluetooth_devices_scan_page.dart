@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 
 import '../services/android_bluetooth_discovery_service.dart';
@@ -140,7 +141,22 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
     try {
       final hasPermissions =
           await BluetoothPermissionService.ensureBluetoothPermission();
-      if (!hasPermissions) {
+      List<BluetoothInfo> pairedDevices = <BluetoothInfo>[];
+      if (!hasPermissions && defaultTargetPlatform == TargetPlatform.iOS) {
+        try {
+          pairedDevices = await PrintBluetoothThermal.pairedBluetooths;
+        } catch (_) {
+          pairedDevices = <BluetoothInfo>[];
+        }
+
+        final status = await Permission.bluetooth.status;
+        if (status.isPermanentlyDenied || status.isRestricted) {
+          await openAppSettings();
+          return;
+        }
+      }
+
+      if (!hasPermissions && defaultTargetPlatform != TargetPlatform.iOS) {
         if (mounted) {
           _showMessage('لم يتم منح صلاحيات البلوتوث المطلوبة.');
         }
@@ -155,7 +171,9 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
         return;
       }
 
-      final pairedDevices = await PrintBluetoothThermal.pairedBluetooths;
+      if (pairedDevices.isEmpty) {
+        pairedDevices = await PrintBluetoothThermal.pairedBluetooths;
+      }
       final normalizedPaired = _deduplicateDevices(pairedDevices);
       final pairedMacs = normalizedPaired
           .map((device) => _normalizeMac(device.macAdress))
