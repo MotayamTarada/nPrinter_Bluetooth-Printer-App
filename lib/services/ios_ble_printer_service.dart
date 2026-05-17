@@ -184,8 +184,8 @@ class IosBlePrinterService {
             );
 
             debugPrint(
-              '[iOS BLE] result name=$name remoteId=$id '
-              'services=$serviceUuids rssi=${result.rssi}',
+              '[iOS BLE] found device name=$name remoteId=$id '
+              'serviceUuids=$serviceUuids rssi=${result.rssi}',
             );
 
             _knownDevicesById[id] = result.device;
@@ -201,7 +201,7 @@ class IosBlePrinterService {
           }
         },
         onError: (Object e, StackTrace st) {
-          debugPrint('iOS BLE scan error: $e');
+          debugPrint('[iOS BLE] scan error: $e');
           debugPrint(st.toString());
         },
       );
@@ -259,7 +259,7 @@ class IosBlePrinterService {
 
     final normalizedId = deviceId.trim().toUpperCase();
     if (normalizedId.isEmpty) {
-      debugPrint('iOS BLE connect aborted: empty device id');
+      debugPrint('[iOS BLE] connecting failed: empty remoteId');
       return false;
     }
 
@@ -284,18 +284,19 @@ class IosBlePrinterService {
     }
 
     if (device == null) {
-      debugPrint('iOS BLE connect failed: device not found id="$normalizedId"');
+      debugPrint('[iOS BLE] connecting failed: device not found remoteId=$normalizedId');
       return false;
     }
 
     await disconnect();
 
     try {
+      debugPrint('[iOS BLE] connecting remoteId=$normalizedId');
       await device.connect(timeout: const Duration(seconds: 10));
     } catch (e) {
       final text = e.toString().toLowerCase();
       if (!text.contains('already connected')) {
-        debugPrint('iOS BLE connect exception id="$normalizedId": $e');
+        debugPrint('[iOS BLE] connecting exception remoteId=$normalizedId error=$e');
       }
     }
 
@@ -303,19 +304,19 @@ class IosBlePrinterService {
     try {
       services = await device.discoverServices();
     } catch (e, stackTrace) {
-      debugPrint('iOS BLE discoverServices failed id="$normalizedId": $e');
+      debugPrint('[iOS BLE] discoverServices failed remoteId=$normalizedId error=$e');
       debugPrint(stackTrace.toString());
       return false;
     }
 
     for (final service in services) {
       final serviceUuid = _normalizeUuid(service.uuid.toString());
-      debugPrint('iOS BLE service uuid=$serviceUuid');
+      debugPrint('[iOS BLE] service uuid=$serviceUuid');
       for (final characteristic in service.characteristics) {
         final uuid = _normalizeUuid(characteristic.uuid.toString());
         final p = characteristic.properties;
         debugPrint(
-          'iOS BLE characteristic service=$serviceUuid uuid=$uuid '
+          '[iOS BLE] char service=$serviceUuid uuid=$uuid '
           'write=${p.write} writeWithoutResponse=${p.writeWithoutResponse} '
           'notify=${p.notify}',
         );
@@ -326,7 +327,7 @@ class IosBlePrinterService {
     selected ??= _findFallbackWritableCharacteristic(services);
 
     if (selected == null) {
-      debugPrint('iOS BLE connect failed: no writable characteristic found');
+      debugPrint('[iOS BLE] connecting failed: no writable characteristic');
       return false;
     }
 
@@ -341,7 +342,7 @@ class IosBlePrinterService {
     final selectedCharUuid = _normalizeUuid(selected.uuid.toString());
     final p = selected.properties;
     debugPrint(
-      'iOS BLE selected write characteristic service=$selectedServiceUuid '
+      '[iOS BLE] selected write char service=$selectedServiceUuid '
       'characteristic=$selectedCharUuid write=${p.write} '
       'writeWithoutResponse=${p.writeWithoutResponse}',
     );
@@ -424,34 +425,32 @@ class IosBlePrinterService {
     }
 
     if (bytes.isEmpty) {
-      debugPrint('iOS BLE write skipped: empty payload');
+      debugPrint('[iOS BLE] print complete chunks=0 totalBytes=0');
       return true;
     }
 
     final resolvedId = (deviceId ?? _connectedDeviceId ?? '').trim().toUpperCase();
     if (resolvedId.isEmpty) {
-      debugPrint('iOS BLE write failed: missing device id');
+      debugPrint('[iOS BLE] writing failed: missing remoteId');
       return false;
     }
 
     final ready = await connectAndPrepareWriter(resolvedId);
     if (!ready) {
-      debugPrint('iOS BLE write failed: connection not ready');
+      debugPrint('[iOS BLE] writing failed: connection not ready');
       return false;
     }
 
     final characteristic = _writeCharacteristic;
     if (characteristic == null) {
-      debugPrint('iOS BLE write failed: missing write characteristic');
+      debugPrint('[iOS BLE] writing failed: write characteristic missing');
       return false;
     }
 
     final canWriteWithResponse = characteristic.properties.write;
     final canWriteWithoutResponse = characteristic.properties.writeWithoutResponse;
     if (!canWriteWithResponse && !canWriteWithoutResponse) {
-      debugPrint(
-        'iOS BLE write failed: selected characteristic is not writable',
-      );
+      debugPrint('[iOS BLE] writing failed: selected characteristic not writable');
       return false;
     }
 
@@ -463,6 +462,10 @@ class IosBlePrinterService {
     for (int i = 0; i < bytes.length; i += safeChunkSize) {
       final end = (i + safeChunkSize > bytes.length) ? bytes.length : i + safeChunkSize;
       final chunk = bytes.sublist(i, end);
+      debugPrint(
+        '[iOS BLE] writing chunk index=$chunkCount '
+        'size=${chunk.length} withoutResponse=$useWithoutResponse',
+      );
       try {
         await characteristic.write(
           chunk,
@@ -470,7 +473,7 @@ class IosBlePrinterService {
         );
       } catch (e, stackTrace) {
         debugPrint(
-          'iOS BLE write failed at chunk=$chunkCount length=${chunk.length}: $e',
+          '[iOS BLE] writing failed at chunk=$chunkCount length=${chunk.length} error=$e',
         );
         debugPrint(stackTrace.toString());
         return false;
@@ -482,7 +485,7 @@ class IosBlePrinterService {
     }
 
     debugPrint(
-      'iOS BLE write completed chunks=$chunkCount totalBytes=${bytes.length} '
+      '[iOS BLE] print complete chunks=$chunkCount totalBytes=${bytes.length} '
       'withoutResponse=$useWithoutResponse',
     );
     return true;
