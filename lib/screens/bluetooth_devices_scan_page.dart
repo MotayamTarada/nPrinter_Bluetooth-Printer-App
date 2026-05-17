@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 
 import '../services/android_bluetooth_discovery_service.dart';
@@ -150,6 +149,9 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
         return;
       }
       if (!hasPermissions && defaultTargetPlatform == TargetPlatform.iOS) {
+        if (mounted) {
+          _showMessage('لم يتم منح صلاحية البلوتوث. يرجى السماح للتطبيق بالوصول للبلوتوث.');
+        }
         return;
       }
 
@@ -162,16 +164,6 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
       }
 
       if (pairedDevices.isEmpty) {
-        if (defaultTargetPlatform == TargetPlatform.iOS) {
-          final status = await Permission.bluetooth.request();
-          if (status.isPermanentlyDenied || status.isRestricted) {
-            await openAppSettings();
-            return;
-          }
-          if (!status.isGranted) {
-            return;
-          }
-        }
         pairedDevices = await PrintBluetoothThermal.pairedBluetooths;
       }
       final normalizedPaired = _deduplicateDevices(pairedDevices);

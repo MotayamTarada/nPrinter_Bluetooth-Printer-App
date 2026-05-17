@@ -1,12 +1,15 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import 'android_bluetooth_discovery_service.dart';
 
 class BluetoothPermissionService {
   BluetoothPermissionService._();
+  static const MethodChannel _iosBluetoothPermissionWarmupChannel =
+      MethodChannel('ios_bluetooth_permission_warmup');
 
   static Future<bool> ensureBluetoothPermission() async {
     if (kIsWeb) {
@@ -25,7 +28,19 @@ class BluetoothPermissionService {
   }
 
   static Future<bool> _ensureIosPermission() async {
-    final status = await Permission.bluetooth.request();
+    var status = await Permission.bluetooth.status;
+
+    if (status.isGranted) {
+      return true;
+    }
+
+    if (status.isRestricted || status.isPermanentlyDenied) {
+      await openAppSettings();
+      return false;
+    }
+
+    await _warmUpIosBluetoothNative();
+    status = await Permission.bluetooth.status;
 
     if (status.isGranted) {
       return true;
@@ -36,6 +51,17 @@ class BluetoothPermissionService {
     }
 
     return false;
+  }
+
+  static Future<void> _warmUpIosBluetoothNative() async {
+    try {
+      await _iosBluetoothPermissionWarmupChannel.invokeMethod<void>(
+        'warmUpBluetoothPermission',
+      );
+    } catch (_) {
+      // Best effort warm-up only.
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 700));
   }
 
   static Future<bool> _ensureAndroidPermission() async {
