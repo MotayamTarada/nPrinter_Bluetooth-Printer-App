@@ -154,10 +154,9 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
         return;
       }
       if (!hasPermissions && defaultTargetPlatform == TargetPlatform.iOS) {
-        if (mounted) {
-          _showMessage('لم يتم منح صلاحية البلوتوث. يرجى السماح للتطبيق بالوصول للبلوتوث.');
-        }
-        return;
+        debugPrint(
+          'iOS BLE: permission not granted yet, proceeding with scan to trigger CoreBluetooth flow.',
+        );
       }
 
       final isBluetoothOn = await PrintBluetoothThermal.bluetoothEnabled;
