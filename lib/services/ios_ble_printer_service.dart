@@ -185,14 +185,11 @@ class IosBlePrinterService {
 
             debugPrint(
               '[iOS BLE] found device name=$name remoteId=$id '
-              'serviceUuids=$serviceUuids rssi=${result.rssi}',
+              'serviceUuids=$serviceUuids rssi=${result.rssi} '
+              'isTarget=$isTarget',
             );
 
             _knownDevicesById[id] = result.device;
-            if (!isTarget) {
-              continue;
-            }
-
             discoveredById[id] = IosBleDiscoveredPrinter(
               id: id,
               name: name,
