@@ -39,6 +39,15 @@ class BluetoothPermissionService {
       return false;
     }
 
+    status = await Permission.bluetooth.request();
+    if (status.isGranted) {
+      return true;
+    }
+    if (status.isRestricted || status.isPermanentlyDenied) {
+      await openAppSettings();
+      return false;
+    }
+
     await _warmUpIosBluetoothNative();
     status = await Permission.bluetooth.status;
 

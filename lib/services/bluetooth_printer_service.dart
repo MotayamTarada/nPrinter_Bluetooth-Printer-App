@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -15,10 +16,36 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'bluetooth_permission_service.dart';
 import 'esc_pos_colored_text_service.dart';
 import 'generate_image_service.dart';
+import 'ios_ble_printer_service.dart';
 import 'printer_status_service.dart';
 
 Future<bool> requestBluetoothPermissions() async {
   return BluetoothPermissionService.ensureBluetoothPermission();
+}
+
+bool get _isIosBlePath => !kIsWeb && Platform.isIOS;
+
+Future<void> _disconnectPrinterTransport() async {
+  if (_isIosBlePath) {
+    await IosBlePrinterService.disconnect();
+    return;
+  }
+  await PrintBluetoothThermal.disconnect;
+}
+
+Future<bool> _connectPrinterTransport(String printerAddress) async {
+  if (_isIosBlePath) {
+    return IosBlePrinterService.connectAndPrepareWriter(printerAddress);
+  }
+  return PrintBluetoothThermal.connect(macPrinterAddress: printerAddress);
+}
+
+Future<bool> _transportConnectionStatus() async {
+  if (_isIosBlePath) {
+    return true;
+  }
+  final status = await PrintBluetoothThermal.connectionStatus;
+  return status ?? false;
 }
 
 PaperSize _resolvePaperSize(double paperWidthMm) {
@@ -621,6 +648,7 @@ Future<void> _playBeepWithFallback({
   required int count,
   required String beepType,
   required Generator generator,
+  String? printerAddress,
 }) async {
   if (count <= 0) {
     return;
@@ -638,11 +666,19 @@ Future<void> _playBeepWithFallback({
   );
 
   if (primary.isNotEmpty) {
-    await PrintBluetoothThermal.writeBytes(primary);
+    await sendPrinterBytes(
+      primary,
+      methodName: '_playBeepWithFallback.primary',
+      printerAddress: printerAddress,
+    );
   }
   await Future<void>.delayed(const Duration(milliseconds: 80));
   if (fallback.isNotEmpty) {
-    await PrintBluetoothThermal.writeBytes(fallback);
+    await sendPrinterBytes(
+      fallback,
+      methodName: '_playBeepWithFallback.fallback',
+      printerAddress: printerAddress,
+    );
   }
 }
 
@@ -656,11 +692,14 @@ Future<bool> _writeUsingBlackPdfMethod(
   RawRedCommand? redCommand,
 }) async {
   final address = printerAddress ?? 'unknown';
-  final connectionStatus = await PrintBluetoothThermal.connectionStatus;
+  final connectionStatus = await _transportConnectionStatus();
+  final writeMethod = _isIosBlePath
+      ? 'IosBlePrinterService.writeEscPosBytes'
+      : _workingWriteMethodName;
   final firstBytes = data.take(30).toList(growable: false);
   _debugPrinterLog(
     'method=$methodName address=$address library=$_printerLibraryName '
-    'dataLength=${data.length} writeMethod=$_workingWriteMethodName '
+    'dataLength=${data.length} writeMethod=$writeMethod '
     'connectionStatus=$connectionStatus sendFormat=List<int> '
     'first30=$firstBytes selectedRedCommand=${redCommand?.label ?? 'none'} '
     'chunkMode=$useChunks stage=write_start',
@@ -673,18 +712,37 @@ Future<bool> _writeUsingBlackPdfMethod(
     return true;
   }
 
+  if (_isIosBlePath) {
+    final success = await IosBlePrinterService.writeEscPosBytes(
+      data.toList(growable: false),
+      deviceId: printerAddress,
+      chunkSize: 180,
+      interChunkDelay: const Duration(milliseconds: 20),
+    );
+    _debugPrinterLog(
+      'method=$methodName address=$address writeMethod=$writeMethod '
+      'success=$success stage=ios_ble_write_complete',
+    );
+    return success;
+  }
+
   if (!useChunks) {
     try {
       final payload = data.toList(growable: false);
-      final success = await PrintBluetoothThermal.writeBytes(payload);
+      final success = _isIosBlePath
+          ? await IosBlePrinterService.writeEscPosBytes(
+              payload,
+              deviceId: printerAddress,
+            )
+          : await PrintBluetoothThermal.writeBytes(payload);
       _debugPrinterLog(
-        'method=$methodName address=$address writeMethod=$_workingWriteMethodName '
+        'method=$methodName address=$address writeMethod=$writeMethod '
         'sendFormat=${payload.runtimeType} success=$success stage=write_complete',
       );
       return success;
     } catch (e, stackTrace) {
       _debugPrinterLog(
-        'method=$methodName address=$address writeMethod=$_workingWriteMethodName '
+        'method=$methodName address=$address writeMethod=$writeMethod '
         'success=false stage=write_exception error=$e',
       );
       debugPrint(stackTrace.toString());
@@ -697,15 +755,20 @@ Future<bool> _writeUsingBlackPdfMethod(
     final end = (i + chunkSize > data.length) ? data.length : i + chunkSize;
     final chunk = data.sublist(i, end).toList(growable: false);
     _debugPrinterLog(
-      'method=$methodName address=$address writeMethod=$_workingWriteMethodName '
+      'method=$methodName address=$address writeMethod=$writeMethod '
       'chunkIndex=$chunkIndex chunkLength=${chunk.length} '
       'sendFormat=${chunk.runtimeType} first30=${chunk.take(30).toList(growable: false)} '
       'stage=chunk_write_start',
     );
     try {
-      final success = await PrintBluetoothThermal.writeBytes(chunk);
+      final success = _isIosBlePath
+          ? await IosBlePrinterService.writeEscPosBytes(
+              chunk,
+              deviceId: printerAddress,
+            )
+          : await PrintBluetoothThermal.writeBytes(chunk);
       _debugPrinterLog(
-        'method=$methodName address=$address writeMethod=$_workingWriteMethodName '
+        'method=$methodName address=$address writeMethod=$writeMethod '
         'chunkIndex=$chunkIndex success=$success stage=chunk_write_complete',
       );
       if (!success) {
@@ -713,7 +776,7 @@ Future<bool> _writeUsingBlackPdfMethod(
       }
     } catch (e, stackTrace) {
       _debugPrinterLog(
-        'method=$methodName address=$address writeMethod=$_workingWriteMethodName '
+        'method=$methodName address=$address writeMethod=$writeMethod '
         'chunkIndex=$chunkIndex success=false stage=chunk_write_exception error=$e',
       );
       debugPrint(stackTrace.toString());
@@ -1126,7 +1189,10 @@ Future<bool> _printRawBitmapInStrips({
       alignment: alignment,
       tsplDensity: tsplDensity,
     );
-    final sent = await PrintBluetoothThermal.writeBytes(bytes);
+    final sent = await sendPrinterBytes(
+      bytes,
+      methodName: '_printRawBitmapInStrips',
+    );
     if (!sent) {
       return false;
     }
@@ -1527,7 +1593,7 @@ Future<bool> _withWorkingEscPosConnection({
     final profile = await CapabilityProfile.load();
     final generator = Generator(paperSize, profile);
 
-    await PrintBluetoothThermal.disconnect;
+    await _disconnectPrinterTransport();
     final hasBluetoothPermissions = await requestBluetoothPermissions();
     if (!hasBluetoothPermissions) {
       return false;
@@ -1541,9 +1607,7 @@ Future<bool> _withWorkingEscPosConnection({
       return false;
     }
 
-    final connected = await PrintBluetoothThermal.connect(
-      macPrinterAddress: mac,
-    );
+    final connected = await _connectPrinterTransport(mac);
     if (!connected) {
       return false;
     }
@@ -1556,7 +1620,7 @@ Future<bool> _withWorkingEscPosConnection({
 
     final jobOk = await runJob(generator);
     if (!jobOk) {
-      await PrintBluetoothThermal.disconnect;
+      await _disconnectPrinterTransport();
       return false;
     }
 
@@ -1568,7 +1632,7 @@ Future<bool> _withWorkingEscPosConnection({
         printerAddress: mac,
       );
       if (!feedOk) {
-        await PrintBluetoothThermal.disconnect;
+        await _disconnectPrinterTransport();
         return false;
       }
     }
@@ -1581,7 +1645,7 @@ Future<bool> _withWorkingEscPosConnection({
         printerAddress: mac,
       );
       if (!cutOk) {
-        await PrintBluetoothThermal.disconnect;
+        await _disconnectPrinterTransport();
         return false;
       }
     }
@@ -1590,6 +1654,7 @@ Future<bool> _withWorkingEscPosConnection({
       count: beepAfter,
       beepType: beepType,
       generator: generator,
+      printerAddress: mac,
     );
     final resetColorOk = await sendPrinterBytes(
       _buildPrintColorBytes('black'),
@@ -1597,17 +1662,17 @@ Future<bool> _withWorkingEscPosConnection({
       printerAddress: mac,
     );
     if (!resetColorOk) {
-      await PrintBluetoothThermal.disconnect;
+      await _disconnectPrinterTransport();
       return false;
     }
-    await PrintBluetoothThermal.disconnect;
+    await _disconnectPrinterTransport();
     return true;
   } catch (e, stackTrace) {
     _debugPrinterLog(
       'method=$methodName address=$mac success=false stage=exception error=$e',
     );
     debugPrint(stackTrace.toString());
-    await PrintBluetoothThermal.disconnect;
+    await _disconnectPrinterTransport();
     return false;
   }
 }
@@ -1738,7 +1803,7 @@ Future<void> printBluetoothReceipt({
     final generator = Generator(paperSize, profile);
     final textChunks = _splitTextIntoChunks(normalizedText);
 
-    await PrintBluetoothThermal.disconnect;
+    await _disconnectPrinterTransport();
     final hasBluetoothPermissions = await requestBluetoothPermissions();
     if (!hasBluetoothPermissions) {
       if (!context.mounted) return;
@@ -1756,9 +1821,7 @@ Future<void> printBluetoothReceipt({
       return;
     }
 
-    final connected = await PrintBluetoothThermal.connect(
-      macPrinterAddress: mac,
-    );
+    final connected = await _connectPrinterTransport(mac);
     if (!connected) {
       if (!context.mounted) return;
       _showMessage(context, _messageConnectionFailed);
@@ -1808,7 +1871,7 @@ Future<void> printBluetoothReceipt({
         ? await printTextChunksForPass(_dualColorPassBlack)
         : await printTextChunksForPass(_dualColorPassAuto);
     if (!sentText) {
-      await PrintBluetoothThermal.disconnect;
+      await _disconnectPrinterTransport();
       if (!context.mounted) return;
       _showMessage(context, _messageConnectionFailed);
       return;
@@ -1817,7 +1880,7 @@ Future<void> printBluetoothReceipt({
       await Future<void>.delayed(const Duration(milliseconds: 180));
       final sentRedText = await printTextChunksForPass(_dualColorPassRed);
       if (!sentRedText) {
-        await PrintBluetoothThermal.disconnect;
+        await _disconnectPrinterTransport();
         if (!context.mounted) return;
         _showMessage(context, _messageConnectionFailed);
         return;
@@ -1827,31 +1890,46 @@ Future<void> printBluetoothReceipt({
     if (feedLines > 0) {
       final safeFeedLines = feedLines.clamp(0, 255).toInt();
       if (_isEscCommandType(effectiveCommandType)) {
-        await PrintBluetoothThermal.writeBytes(generator.feed(safeFeedLines));
+        await sendPrinterBytes(
+          generator.feed(safeFeedLines),
+          methodName: 'printBluetoothReceipt.feed',
+          printerAddress: mac,
+        );
       } else {
-        await PrintBluetoothThermal.writeBytes(
+        await sendPrinterBytes(
           List<int>.filled(safeFeedLines, 0x0A),
+          methodName: 'printBluetoothReceipt.feed.lf',
+          printerAddress: mac,
         );
       }
     }
 
     if (autoCut && _isEscCommandType(effectiveCommandType)) {
       await Future<void>.delayed(const Duration(milliseconds: 220));
-      await PrintBluetoothThermal.writeBytes(<int>[...generator.cut()]);
+      await sendPrinterBytes(
+        <int>[...generator.cut()],
+        methodName: 'printBluetoothReceipt.cut',
+        printerAddress: mac,
+      );
     }
 
     await _playBeepWithFallback(
       count: beepAfter,
       beepType: beepType,
       generator: generator,
+      printerAddress: mac,
     );
 
     if (_isEscCommandType(effectiveCommandType)) {
       // Reset to black for next jobs by default.
-      await PrintBluetoothThermal.writeBytes(_buildPrintColorBytes('black'));
+      await sendPrinterBytes(
+        _buildPrintColorBytes('black'),
+        methodName: 'printBluetoothReceipt.finishBlack',
+        printerAddress: mac,
+      );
     }
 
-    await PrintBluetoothThermal.disconnect;
+    await _disconnectPrinterTransport();
     final afterPrintStatus = await _checkEscPosPrinterStatus(
       mac: mac,
       effectiveCommandType: effectiveCommandType,
@@ -1859,7 +1937,7 @@ Future<void> printBluetoothReceipt({
     if (!context.mounted) return;
     _showMessage(context, _printAcceptedMessage(afterPrintStatus));
   } catch (e) {
-    await PrintBluetoothThermal.disconnect;
+    await _disconnectPrinterTransport();
     if (context.mounted) {
       _showMessage(context, _messageConnectionFailed);
     }
@@ -2334,7 +2412,7 @@ Future<bool> printBluetoothPdfReceipt({
     document = pdfDocument;
 
     _debugPrinterLog('method=printBlackPdf address=$mac stage=connect_start');
-    await PrintBluetoothThermal.disconnect;
+    await _disconnectPrinterTransport();
     final hasBluetoothPermissions = await requestBluetoothPermissions();
     if (!hasBluetoothPermissions) {
       if (context.mounted && showMessages) {
@@ -2354,9 +2432,7 @@ Future<bool> printBluetoothPdfReceipt({
       return false;
     }
 
-    final connected = await PrintBluetoothThermal.connect(
-      macPrinterAddress: mac,
-    );
+    final connected = await _connectPrinterTransport(mac);
     _debugPrinterLog(
       'method=printBlackPdf address=$mac success=$connected stage=connect_complete',
     );
@@ -2430,7 +2506,7 @@ Future<bool> printBluetoothPdfReceipt({
 
     final sentPdf = await printPdfPagesForPass(_dualColorPassAuto);
     if (!sentPdf) {
-      await PrintBluetoothThermal.disconnect;
+      await _disconnectPrinterTransport();
       if (context.mounted && showMessages) {
         _showMessage(context, _messageConnectionFailed);
       }
@@ -2440,31 +2516,46 @@ Future<bool> printBluetoothPdfReceipt({
     if (feedLines > 0) {
       final safeFeedLines = feedLines.clamp(0, 255).toInt();
       if (_isEscCommandType(effectiveCommandType)) {
-        await PrintBluetoothThermal.writeBytes(generator.feed(safeFeedLines));
+        await sendPrinterBytes(
+          generator.feed(safeFeedLines),
+          methodName: 'printBluetoothPdfReceipt.feed',
+          printerAddress: mac,
+        );
       } else {
-        await PrintBluetoothThermal.writeBytes(
+        await sendPrinterBytes(
           List<int>.filled(safeFeedLines, 0x0A),
+          methodName: 'printBluetoothPdfReceipt.feed.lf',
+          printerAddress: mac,
         );
       }
     }
 
     if (autoCut && _isEscCommandType(effectiveCommandType)) {
       await Future<void>.delayed(const Duration(milliseconds: 220));
-      await PrintBluetoothThermal.writeBytes(<int>[...generator.cut()]);
+      await sendPrinterBytes(
+        <int>[...generator.cut()],
+        methodName: 'printBluetoothPdfReceipt.cut',
+        printerAddress: mac,
+      );
     }
 
     await _playBeepWithFallback(
       count: beepAfter,
       beepType: beepType,
       generator: generator,
+      printerAddress: mac,
     );
 
     if (_isEscCommandType(effectiveCommandType)) {
       // Reset to black for next jobs by default.
-      await PrintBluetoothThermal.writeBytes(_buildPrintColorBytes('black'));
+      await sendPrinterBytes(
+        _buildPrintColorBytes('black'),
+        methodName: 'printBluetoothPdfReceipt.finishBlack',
+        printerAddress: mac,
+      );
     }
 
-    await PrintBluetoothThermal.disconnect;
+    await _disconnectPrinterTransport();
     final afterPrintStatus = await _checkEscPosPrinterStatus(
       mac: mac,
       effectiveCommandType: effectiveCommandType,
@@ -2479,7 +2570,7 @@ Future<bool> printBluetoothPdfReceipt({
       'method=printBlackPdf address=$mac success=false stage=exception error=$e',
     );
     debugPrint(stackTrace.toString());
-    await PrintBluetoothThermal.disconnect;
+    await _disconnectPrinterTransport();
     if (context.mounted && showMessages) {
       _showMessage(context, _messageConnectionFailed);
     }
@@ -2533,7 +2624,7 @@ Future<void> printTextAsRasterImage({
     final generator = Generator(paperSize, profile);
     final textChunks = _splitTextIntoChunks(message);
 
-    await PrintBluetoothThermal.disconnect;
+    await _disconnectPrinterTransport();
     final hasBluetoothPermissions = await requestBluetoothPermissions();
     if (!hasBluetoothPermissions) {
       if (!context.mounted) return;
@@ -2554,9 +2645,7 @@ Future<void> printTextAsRasterImage({
     _debugPrinterLog(
       'method=printTextAsRasterImage address=$mac stage=connect_start',
     );
-    final connected = await PrintBluetoothThermal.connect(
-      macPrinterAddress: mac,
-    );
+    final connected = await _connectPrinterTransport(mac);
     _debugPrinterLog(
       'method=printTextAsRasterImage address=$mac success=$connected '
       'stage=connect_complete',
@@ -2602,7 +2691,7 @@ Future<void> printTextAsRasterImage({
         debugPrinterAddress: mac,
       );
       if (!sentChunk) {
-        await PrintBluetoothThermal.disconnect;
+        await _disconnectPrinterTransport();
         if (!context.mounted) return;
         _showMessage(context, _messageConnectionFailed);
         return;
@@ -2613,30 +2702,45 @@ Future<void> printTextAsRasterImage({
     if (feedLines > 0) {
       final safeFeedLines = feedLines.clamp(0, 255).toInt();
       if (_isEscCommandType(effectiveCommandType)) {
-        await PrintBluetoothThermal.writeBytes(generator.feed(safeFeedLines));
+        await sendPrinterBytes(
+          generator.feed(safeFeedLines),
+          methodName: 'printTextAsRasterImage.feed',
+          printerAddress: mac,
+        );
       } else {
-        await PrintBluetoothThermal.writeBytes(
+        await sendPrinterBytes(
           List<int>.filled(safeFeedLines, 0x0A),
+          methodName: 'printTextAsRasterImage.feed.lf',
+          printerAddress: mac,
         );
       }
     }
 
     if (autoCut && _isEscCommandType(effectiveCommandType)) {
       await Future<void>.delayed(const Duration(milliseconds: 220));
-      await PrintBluetoothThermal.writeBytes(<int>[...generator.cut()]);
+      await sendPrinterBytes(
+        <int>[...generator.cut()],
+        methodName: 'printTextAsRasterImage.cut',
+        printerAddress: mac,
+      );
     }
 
     await _playBeepWithFallback(
       count: beepAfter,
       beepType: beepType,
       generator: generator,
+      printerAddress: mac,
     );
 
     if (_isEscCommandType(effectiveCommandType)) {
-      await PrintBluetoothThermal.writeBytes(_buildPrintColorBytes('black'));
+      await sendPrinterBytes(
+        _buildPrintColorBytes('black'),
+        methodName: 'printTextAsRasterImage.finishBlack',
+        printerAddress: mac,
+      );
     }
 
-    await PrintBluetoothThermal.disconnect;
+    await _disconnectPrinterTransport();
     final afterPrintStatus = await _checkEscPosPrinterStatus(
       mac: mac,
       effectiveCommandType: effectiveCommandType,
@@ -2653,7 +2757,7 @@ Future<void> printTextAsRasterImage({
       'stage=exception error=$e',
     );
     debugPrint(stackTrace.toString());
-    await PrintBluetoothThermal.disconnect;
+    await _disconnectPrinterTransport();
     if (context.mounted) {
       _showMessage(context, _messageConnectionFailed);
     }

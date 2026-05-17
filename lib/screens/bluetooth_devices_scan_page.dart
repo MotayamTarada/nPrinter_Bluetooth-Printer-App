@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 
 import '../services/android_bluetooth_discovery_service.dart';
+import '../services/ios_ble_printer_service.dart';
 import '../services/bluetooth_permission_service.dart';
 
 class BluetoothDevicesScanPage extends StatefulWidget {
@@ -55,7 +56,11 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
   }
 
   String _normalizeMac(String mac) {
-    return mac.trim().replaceAll('-', ':').toUpperCase();
+    final normalized = mac.trim().toUpperCase();
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      return normalized;
+    }
+    return normalized.replaceAll('-', ':');
   }
 
   String _deviceDisplayName(BluetoothInfo device) {
@@ -163,15 +168,28 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
         return;
       }
 
-      if (pairedDevices.isEmpty) {
-        pairedDevices = await PrintBluetoothThermal.pairedBluetooths;
+      List<BluetoothInfo> nearbyDevices = <BluetoothInfo>[];
+      if (defaultTargetPlatform == TargetPlatform.iOS) {
+        final iosDiscovered = await IosBlePrinterService.scanForPrinters(
+          timeout: const Duration(seconds: 6),
+        );
+        pairedDevices = iosDiscovered
+            .map(
+              (device) =>
+                  BluetoothInfo(name: device.name, macAdress: device.id),
+            )
+            .toList(growable: false);
+      } else {
+        if (pairedDevices.isEmpty) {
+          pairedDevices = await PrintBluetoothThermal.pairedBluetooths;
+        }
       }
+
       final normalizedPaired = _deduplicateDevices(pairedDevices);
       final pairedMacs = normalizedPaired
           .map((device) => _normalizeMac(device.macAdress))
           .toSet();
 
-      List<BluetoothInfo> nearbyDevices = <BluetoothInfo>[];
       if (defaultTargetPlatform == TargetPlatform.android) {
         try {
           final discovered = await AndroidBluetoothDiscoveryService.discover(
