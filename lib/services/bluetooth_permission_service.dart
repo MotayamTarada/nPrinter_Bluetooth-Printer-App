@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 
 import 'android_bluetooth_discovery_service.dart';
 
@@ -32,6 +33,26 @@ class BluetoothPermissionService {
 
     final requestedStatus = await Permission.bluetooth.request();
     if (requestedStatus == PermissionStatus.granted) {
+      return true;
+    }
+
+    // On iOS, permission_handler may report `denied` while status is still
+    // not-determined until CoreBluetooth scanning/connection is attempted.
+    // Trigger one scan attempt through the printer plugin, then re-check.
+    if (requestedStatus == PermissionStatus.denied) {
+      try {
+        await PrintBluetoothThermal.pairedBluetooths;
+      } catch (_) {}
+
+      final refreshedStatus = await Permission.bluetooth.status;
+      if (refreshedStatus == PermissionStatus.granted) {
+        return true;
+      }
+      if (refreshedStatus == PermissionStatus.permanentlyDenied ||
+          refreshedStatus == PermissionStatus.restricted) {
+        await openAppSettings();
+        return false;
+      }
       return true;
     }
 
