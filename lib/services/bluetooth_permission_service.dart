@@ -23,8 +23,29 @@ class BluetoothPermissionService {
   }
 
   static Future<bool> _ensureIosPermission() async {
-    final status = await Permission.bluetooth.request();
-    return status == PermissionStatus.granted;
+    final bluetoothPermission = Permission.bluetooth;
+    var status = await bluetoothPermission.status;
+    if (status == PermissionStatus.granted) {
+      return true;
+    }
+
+    if (status == PermissionStatus.restricted ||
+        status == PermissionStatus.permanentlyDenied) {
+      return false;
+    }
+
+    status = await bluetoothPermission.request();
+    if (status == PermissionStatus.granted) {
+      return true;
+    }
+
+    // Fallback: بعض إصدارات iOS/SDK تُرجع الحالة عبر bluetoothConnect.
+    final connectStatus = await Permission.bluetoothConnect.request();
+    if (connectStatus == PermissionStatus.granted) {
+      return true;
+    }
+
+    return false;
   }
 
   static Future<bool> _ensureAndroidPermission() async {
