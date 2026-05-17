@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 
 import 'android_bluetooth_discovery_service.dart';
 
@@ -26,42 +25,28 @@ class BluetoothPermissionService {
   }
 
   static Future<bool> _ensureIosPermission() async {
-    final currentStatus = await Permission.bluetooth.status;
-    if (currentStatus == PermissionStatus.granted) {
+    var status = await Permission.bluetooth.status;
+
+    if (status.isGranted) {
       return true;
     }
 
-    final requestedStatus = await Permission.bluetooth.request();
-    if (requestedStatus == PermissionStatus.granted) {
+    if (status.isRestricted || status.isPermanentlyDenied) {
+      await openAppSettings();
+      return false;
+    }
+
+    status = await Permission.bluetooth.request();
+
+    if (status.isGranted) {
       return true;
     }
 
-    // On iOS, permission_handler may report `denied` while status is still
-    // not-determined until CoreBluetooth scanning/connection is attempted.
-    // Trigger one scan attempt through the printer plugin, then re-check.
-    if (requestedStatus == PermissionStatus.denied) {
-      try {
-        await PrintBluetoothThermal.pairedBluetooths;
-      } catch (_) {}
-
-      final refreshedStatus = await Permission.bluetooth.status;
-      if (refreshedStatus == PermissionStatus.granted) {
-        return true;
-      }
-      if (refreshedStatus == PermissionStatus.permanentlyDenied ||
-          refreshedStatus == PermissionStatus.restricted) {
-        await openAppSettings();
-        return true;
-      }
-      return true;
-    }
-
-    if (requestedStatus == PermissionStatus.permanentlyDenied ||
-        requestedStatus == PermissionStatus.restricted) {
+    if (status.isRestricted || status.isPermanentlyDenied) {
       await openAppSettings();
     }
 
-    return true;
+    return false;
   }
 
   static Future<bool> _ensureAndroidPermission() async {
@@ -73,17 +58,17 @@ class BluetoothPermissionService {
         Permission.bluetoothConnect,
       ].request();
 
-      final scanStatus = statuses[Permission.bluetoothScan] ?? PermissionStatus.denied;
+      final scanStatus =
+          statuses[Permission.bluetoothScan] ?? PermissionStatus.denied;
+
       final connectStatus =
           statuses[Permission.bluetoothConnect] ?? PermissionStatus.denied;
 
-      final granted =
-          scanStatus == PermissionStatus.granted &&
-          connectStatus == PermissionStatus.granted;
+      final granted = scanStatus.isGranted && connectStatus.isGranted;
 
       if (!granted &&
-          (scanStatus == PermissionStatus.permanentlyDenied ||
-              connectStatus == PermissionStatus.permanentlyDenied)) {
+          (scanStatus.isPermanentlyDenied ||
+              connectStatus.isPermanentlyDenied)) {
         await openAppSettings();
       }
 
@@ -91,11 +76,12 @@ class BluetoothPermissionService {
     }
 
     final locationStatus = await Permission.locationWhenInUse.request();
-    if (locationStatus == PermissionStatus.granted) {
+
+    if (locationStatus.isGranted) {
       return true;
     }
 
-    if (locationStatus == PermissionStatus.permanentlyDenied) {
+    if (locationStatus.isPermanentlyDenied) {
       await openAppSettings();
     }
 
