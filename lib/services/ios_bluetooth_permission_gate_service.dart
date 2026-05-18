@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import 'ios_ble_printer_service.dart';
+
 enum IosBluetoothGateState {
   loading,
   available,
@@ -43,9 +45,16 @@ class IosBluetoothPermissionGateService {
       );
     }
 
-    var status = await Permission.bluetooth.status;
-    if (requestIfNeeded && !status.isGranted) {
-      status = await Permission.bluetooth.request();
+    PermissionStatus status;
+    if (requestIfNeeded) {
+      // iOS may not expose the Bluetooth toggle in app settings until the app
+      // touches CoreBluetooth APIs. Reuse the existing iOS BLE warm-up scan to
+      // trigger the native permission flow without changing printer logic.
+      final outcome =
+          await IosBlePrinterService.startIosBleScanForPermissionAndPrinters();
+      status = outcome.permissionAfterScan;
+    } else {
+      status = await Permission.bluetooth.status;
     }
 
     if (!status.isGranted) {
@@ -109,4 +118,3 @@ class IosBluetoothPermissionGateService {
     }
   }
 }
-
