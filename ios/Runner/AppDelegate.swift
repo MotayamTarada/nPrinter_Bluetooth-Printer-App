@@ -5,6 +5,7 @@ import UIKit
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate, CBCentralManagerDelegate {
   private var bluetoothCentralManager: CBCentralManager?
+  private var didWarmUpBluetoothPermission = false
 
   override func application(
     _ application: UIApplication,
@@ -27,6 +28,11 @@ import UIKit
       }
     }
 
+    // Ensure iOS Bluetooth privacy prompt can appear even when scene-based
+    // window initialization is delayed. This makes the app show up under
+    // Settings > Privacy & Security > Bluetooth after first request.
+    warmUpBluetoothPermissionIfNeeded()
+
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
@@ -35,6 +41,10 @@ import UIKit
   }
 
   private func warmUpBluetoothPermission() {
+    guard !didWarmUpBluetoothPermission else {
+      return
+    }
+    didWarmUpBluetoothPermission = true
     bluetoothCentralManager = CBCentralManager(
       delegate: self,
       queue: nil,
@@ -42,6 +52,15 @@ import UIKit
         CBCentralManagerOptionShowPowerAlertKey: true
       ]
     )
+  }
+
+  private func warmUpBluetoothPermissionIfNeeded() {
+    if #available(iOS 13.0, *) {
+      guard CBCentralManager.authorization == .notDetermined else {
+        return
+      }
+    }
+    warmUpBluetoothPermission()
   }
 
   func centralManagerDidUpdateState(_ central: CBCentralManager) {
