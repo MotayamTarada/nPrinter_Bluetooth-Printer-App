@@ -3,7 +3,9 @@
 import 'package:flutter/material.dart';
 
 import 'screens/bluetooth_printer_home_page.dart';
+import 'screens/ios_bluetooth_permission_page.dart';
 import 'screens/nprinter_loading_page.dart';
+import 'services/ios_bluetooth_permission_gate_service.dart';
 
 void main() {
   runApp(const NPrinterBluetoothOnlyApp());
@@ -37,6 +39,7 @@ class _AppEntryPoint extends StatefulWidget {
 class _AppEntryPointState extends State<_AppEntryPoint> {
   Timer? _timer;
   bool _showLoading = true;
+  bool _iosGateCompleted = false;
 
   @override
   void initState() {
@@ -53,6 +56,13 @@ class _AppEntryPointState extends State<_AppEntryPoint> {
     });
   }
 
+  void _completeIosGate() {
+    if (!mounted) {
+      return;
+    }
+    setState(() => _iosGateCompleted = true);
+  }
+
   @override
   void dispose() {
     _timer?.cancel();
@@ -63,6 +73,10 @@ class _AppEntryPointState extends State<_AppEntryPoint> {
   Widget build(BuildContext context) {
     if (_showLoading) {
       return const NPrinterLoadingPage();
+    }
+    if (IosBluetoothPermissionGateService.isIosGateRequired &&
+        !_iosGateCompleted) {
+      return IosBluetoothPermissionPage(onContinue: _completeIosGate);
     }
     return const BluetoothPrinterHomePage();
   }
