@@ -73,6 +73,32 @@ class PdfIntentService {
     }
   }
 
+  static Future<bool> hasPendingPdf() async {
+    if (!_isAndroid) {
+      return false;
+    }
+
+    try {
+      final value = await _channel.invokeMethod<Object?>('hasPendingPdf');
+      return value == true;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
+  static Future<bool> wasOpenedWithPdfIntent() async {
+    if (!_isAndroid) {
+      return false;
+    }
+
+    try {
+      final value = await _channel.invokeMethod<Object?>('wasOpenedWithPdfIntent');
+      return value == true;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
   static Future<dynamic> _handleMethodCall(MethodCall call) async {
     switch (call.method) {
       case 'pdfOpened':

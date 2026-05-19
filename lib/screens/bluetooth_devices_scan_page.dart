@@ -21,12 +21,17 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
   static const Duration _nearbyScanTimeout = Duration(seconds: 16);
   static const String _defaultPairingPin = '0000';
 
-  final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _pairedSearchController =
+      TextEditingController();
+  final TextEditingController _nearbySearchController =
+      TextEditingController();
   final List<BluetoothInfo> _pairedDevices = <BluetoothInfo>[];
   final List<BluetoothInfo> _nearbyDevices = <BluetoothInfo>[];
 
   bool _isLoading = false;
-  String _searchQuery = '';
+  bool _isBluetoothOff = false;
+  String _pairedSearchQuery = '';
+  String _nearbySearchQuery = '';
   String? _pairingMac;
 
   bool get _isSupported =>
@@ -37,23 +42,34 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
   @override
   void initState() {
     super.initState();
-    _searchController.addListener(_handleSearchChanged);
+    _pairedSearchController.addListener(_handlePairedSearchChanged);
+    _nearbySearchController.addListener(_handleNearbySearchChanged);
     _refreshDevices();
   }
 
   @override
   void dispose() {
-    _searchController.removeListener(_handleSearchChanged);
-    _searchController.dispose();
+    _pairedSearchController.removeListener(_handlePairedSearchChanged);
+    _nearbySearchController.removeListener(_handleNearbySearchChanged);
+    _pairedSearchController.dispose();
+    _nearbySearchController.dispose();
     super.dispose();
   }
 
-  void _handleSearchChanged() {
-    final value = _searchController.text;
-    if (value == _searchQuery) {
+  void _handlePairedSearchChanged() {
+    final value = _pairedSearchController.text;
+    if (value == _pairedSearchQuery) {
       return;
     }
-    setState(() => _searchQuery = value);
+    setState(() => _pairedSearchQuery = value);
+  }
+
+  void _handleNearbySearchChanged() {
+    final value = _nearbySearchController.text;
+    if (value == _nearbySearchQuery) {
+      return;
+    }
+    setState(() => _nearbySearchQuery = value);
   }
 
   String _normalizeMac(String mac) {
@@ -118,8 +134,8 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
     return sorted;
   }
 
-  bool _matchesSearch(BluetoothInfo device) {
-    final query = _searchQuery.trim().toLowerCase();
+  bool _matchesSearch(BluetoothInfo device, String queryText) {
+    final query = queryText.trim().toLowerCase();
     if (query.isEmpty) {
       return true;
     }
@@ -128,8 +144,11 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
     return name.contains(query) || mac.contains(query);
   }
 
-  List<BluetoothInfo> _filterBySearch(List<BluetoothInfo> devices) {
-    return devices.where(_matchesSearch).toList();
+  List<BluetoothInfo> _filterBySearch(
+    List<BluetoothInfo> devices,
+    String queryText,
+  ) {
+    return devices.where((device) => _matchesSearch(device, queryText)).toList();
   }
 
   Future<void> _refreshDevices() async {
@@ -139,6 +158,7 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
 
     setState(() {
       _isLoading = true;
+      _isBluetoothOff = false;
       _pairedDevices.clear();
       _nearbyDevices.clear();
     });
@@ -175,7 +195,7 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
         final isBluetoothOn = await PrintBluetoothThermal.bluetoothEnabled;
         if (!isBluetoothOn) {
           if (mounted) {
-            _showMessage('Please enable Bluetooth then try again.');
+            setState(() => _isBluetoothOff = true);
           }
           return;
         }
@@ -377,14 +397,14 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
 
   @override
   Widget build(BuildContext context) {
-    final filteredPaired = _filterBySearch(_pairedDevices);
-    final filteredNearby = _filterBySearch(_nearbyDevices);
+    final filteredPaired = _filterBySearch(_pairedDevices, _pairedSearchQuery);
+    final filteredNearby = _filterBySearch(_nearbyDevices, _nearbySearchQuery);
 
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('شاشة البلوتوث'),
+          title: const Text('البحث بواسطة بلوتوث'),
           centerTitle: true,
           actions: [
             IconButton(
@@ -394,29 +414,29 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
             ),
           ],
         ),
-        body: _isSupported
-            ? Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-                    child: TextField(
-                      controller: _searchController,
-                      decoration: InputDecoration(
-                        hintText: 'ابحث باسم الجهاز أو MAC',
-                        prefixIcon: const Icon(Icons.search_rounded),
-                        suffixIcon: _searchQuery.trim().isEmpty
-                            ? null
-                            : IconButton(
-                                tooltip: 'مسح البحث',
-                                icon: const Icon(Icons.close_rounded),
-                                onPressed: _searchController.clear,
-                              ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                      ),
-                    ),
+        body: !_isSupported
+            ? const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                    'هذه الشاشة تعمل على Android و iOS فقط.',
+                    textAlign: TextAlign.center,
                   ),
+                ),
+              )
+            : _isBluetoothOff
+            ? const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                    'يرجى تشغيل البلوتوث ثم إعادة المحاولة.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              )
+            : Column(
+                children: [
                   if (_isLoading) const LinearProgressIndicator(minHeight: 2),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
@@ -438,7 +458,19 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
                       padding: const EdgeInsets.fromLTRB(12, 8, 12, 14),
                       children: [
                         _buildSection(
-                          title: 'الأجهزة المقترنة',
+                          title: 'الأجهزة القريبة المتاحة الآن',
+                          emptyText:
+                              'لا توجد أجهزة قريبة حالياً. تأكد أن الطابعة في وضع الاقتران ثم اضغط تحديث.',
+                          devices: filteredNearby,
+                          onTap: _pairNearbyDevice,
+                          showPairingState: true,
+                          searchController: _nearbySearchController,
+                          searchQuery: _nearbySearchQuery,
+                          searchHintText: 'ابحث بالاسم أو MAC',
+                        ),
+                        const SizedBox(height: 12),
+                        _buildSection(
+                          title: 'الأجهزة المقترنة سابقا',
                           emptyText: 'لا توجد أجهزة مقترنة حالياً.',
                           devices: filteredPaired,
                           onTap: (device) async {
@@ -448,29 +480,14 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
                             );
                           },
                           showPairingState: false,
-                        ),
-                        const SizedBox(height: 12),
-                        _buildSection(
-                          title: 'الأجهزة القريبة المتاحة الآن',
-                          emptyText:
-                              'لا توجد أجهزة قريبة حالياً. تأكد أن الطابعة في وضع الاقتران ثم اضغط تحديث.',
-                          devices: filteredNearby,
-                          onTap: _pairNearbyDevice,
-                          showPairingState: true,
+                          searchController: _pairedSearchController,
+                          searchQuery: _pairedSearchQuery,
+                          searchHintText: 'ابحث بالاسم أو MAC',
                         ),
                       ],
                     ),
                   ),
                 ],
-              )
-            : const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Text(
-                    'هذه الشاشة تعمل على Android و iOS فقط.',
-                    textAlign: TextAlign.center,
-                  ),
-                ),
               ),
       ),
     );
@@ -482,6 +499,9 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
     required List<BluetoothInfo> devices,
     required Future<void> Function(BluetoothInfo) onTap,
     required bool showPairingState,
+    required TextEditingController searchController,
+    required String searchQuery,
+    required String searchHintText,
   }) {
     return Container(
       decoration: BoxDecoration(
@@ -501,9 +521,44 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
               color: const Color(0xffEAF5FF),
               border: const Border(bottom: BorderSide(color: Colors.black12)),
             ),
-            child: Text(
-              '$title (${devices.length})',
-              style: const TextStyle(fontWeight: FontWeight.w700),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '$title (${devices.length})',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 165,
+                  height: 34,
+                  child: TextField(
+                    controller: searchController,
+                    textAlignVertical: TextAlignVertical.center,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      hintText: searchHintText,
+                      prefixIcon: const Icon(Icons.search_rounded, size: 18),
+                      suffixIcon: searchQuery.trim().isEmpty
+                          ? null
+                          : IconButton(
+                              tooltip: 'مسح البحث',
+                              icon: const Icon(Icons.close_rounded, size: 16),
+                              onPressed: searchController.clear,
+                            ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 7,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+              ],
             ),
           ),
           if (devices.isEmpty)

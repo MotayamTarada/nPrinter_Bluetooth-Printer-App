@@ -19,6 +19,46 @@ class _PrintFontConfig {
 
 final Set<String> _loadedPrintFonts = <String>{};
 
+void _drawBorderAroundTextBounds({
+  required Canvas canvas,
+  required double imageWidth,
+  required double imageHeight,
+  required double textX,
+  required double textY,
+  required double textWidth,
+  required double textHeight,
+}) {
+  const borderPadding = 10.0;
+  const safeInset = 1.0;
+
+  var left = textX - borderPadding;
+  var top = textY - borderPadding;
+  var right = textX + textWidth + borderPadding;
+  var bottom = textY + textHeight + borderPadding;
+
+  if (left < safeInset) {
+    left = safeInset;
+  }
+  if (top < safeInset) {
+    top = safeInset;
+  }
+  if (right > imageWidth - safeInset) {
+    right = imageWidth - safeInset;
+  }
+  if (bottom > imageHeight - safeInset) {
+    bottom = imageHeight - safeInset;
+  }
+  if (right <= left || bottom <= top) {
+    return;
+  }
+
+  final borderPaint = Paint()
+    ..color = Colors.black
+    ..strokeWidth = 2
+    ..style = PaintingStyle.stroke;
+  canvas.drawRect(Rect.fromLTRB(left, top, right, bottom), borderPaint);
+}
+
 double _paperPixelWidth(double paperWidthMm, {String printerProfile = 'auto'}) {
   switch (printerProfile) {
     case '58':
@@ -145,16 +185,19 @@ Future<ui.Image> generateSimpleTextImage(
     Paint()..color = Colors.white,
   );
 
-  if (addBorder) {
-    final borderPaint = Paint()
-      ..color = Colors.black
-      ..strokeWidth = 2
-      ..style = PaintingStyle.stroke;
-    canvas.drawRect(Rect.fromLTWH(0, 0, width, height), borderPaint);
-  }
-
   final textX = padding + (width - 2 * padding - tp.width) / 2;
   const textY = padding;
+  if (addBorder) {
+    _drawBorderAroundTextBounds(
+      canvas: canvas,
+      imageWidth: width,
+      imageHeight: height,
+      textX: textX,
+      textY: textY,
+      textWidth: tp.width,
+      textHeight: tp.height,
+    );
+  }
   tp.paint(canvas, Offset(textX, textY));
 
   final picture = recorder.endRecording();
@@ -206,16 +249,19 @@ Future<ui.Image> generateTaggedTextImage(
     Paint()..color = Colors.white,
   );
 
-  if (addBorder) {
-    final borderPaint = Paint()
-      ..color = Colors.black
-      ..strokeWidth = 2
-      ..style = PaintingStyle.stroke;
-    canvas.drawRect(Rect.fromLTWH(0, 0, width, height), borderPaint);
-  }
-
   final textX = padding + (width - 2 * padding - tp.width) / 2;
   const textY = padding;
+  if (addBorder) {
+    _drawBorderAroundTextBounds(
+      canvas: canvas,
+      imageWidth: width,
+      imageHeight: height,
+      textX: textX,
+      textY: textY,
+      textWidth: tp.width,
+      textHeight: tp.height,
+    );
+  }
   tp.paint(canvas, Offset(textX, textY));
 
   final picture = recorder.endRecording();
@@ -271,16 +317,19 @@ Future<ui.Image> generateTaggedTextLayerImage(
     Paint()..color = Colors.white,
   );
 
-  if (addBorder) {
-    final borderPaint = Paint()
-      ..color = Colors.black
-      ..strokeWidth = 2
-      ..style = PaintingStyle.stroke;
-    canvas.drawRect(Rect.fromLTWH(0, 0, width, height), borderPaint);
-  }
-
   final textX = padding + (width - 2 * padding - tp.width) / 2;
   const textY = padding;
+  if (addBorder) {
+    _drawBorderAroundTextBounds(
+      canvas: canvas,
+      imageWidth: width,
+      imageHeight: height,
+      textX: textX,
+      textY: textY,
+      textWidth: tp.width,
+      textHeight: tp.height,
+    );
+  }
   tp.paint(canvas, Offset(textX, textY));
 
   final picture = recorder.endRecording();

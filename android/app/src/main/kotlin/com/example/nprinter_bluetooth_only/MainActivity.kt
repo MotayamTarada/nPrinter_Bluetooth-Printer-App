@@ -37,6 +37,7 @@ class MainActivity : FlutterActivity() {
   private var timeoutRunnable: Runnable? = null
   private var pdfIntentChannel: MethodChannel? = null
   private var pendingPdfIntent: Map<String, String>? = null
+  private var openedWithPdfIntent: Boolean = false
 
   override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
     super.configureFlutterEngine(flutterEngine)
@@ -45,6 +46,12 @@ class MainActivity : FlutterActivity() {
       channel ->
       channel.setMethodCallHandler { call: MethodCall, result: MethodChannel.Result ->
         when (call.method) {
+          "hasPendingPdf" -> {
+            result.success(pendingPdfIntent != null)
+          }
+          "wasOpenedWithPdfIntent" -> {
+            result.success(openedWithPdfIntent)
+          }
           "consumeInitialPdf" -> {
             val payload = pendingPdfIntent
             pendingPdfIntent = null
@@ -133,6 +140,7 @@ class MainActivity : FlutterActivity() {
   private fun handleIncomingPdfIntent(intent: Intent?, notifyFlutter: Boolean) {
     val payload = pdfPayloadFromIntent(intent) ?: return
     pendingPdfIntent = payload
+    openedWithPdfIntent = true
     if (notifyFlutter) {
       pdfIntentChannel?.invokeMethod("pdfOpened", payload)
     }

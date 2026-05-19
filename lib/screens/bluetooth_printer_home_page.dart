@@ -59,7 +59,11 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     '112',
     _customPaperWidthValue,
   ];
-  static const List<String> _allowedBeepTypes = <String>['0x07', '0x1B, 0x42'];
+  static const List<String> _allowedBeepTypes = <String>[
+    '0x07',
+    '0x1B, 0x42',
+    '- لا يوجد',
+  ];
   static const List<String> _allowedTextFontFamilies = <String>[
     'NotoKufiArabicBold',
     'Tajawal',
@@ -118,6 +122,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   bool isAdditionalSettingsExpanded = false;
   String? selectedPdfPath;
   String? selectedPdfName;
+  bool _isPrinting = false;
 
   final macController = TextEditingController();
   final textController = TextEditingController(text: _defaultPrintText);
@@ -568,7 +573,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
       textBorder: textBorder,
       fitMode: fitMode,
       contentAlignment: contentAlignment,
-      commandType: 'esc',
+      commandType: commandType,
       printRotationDegrees: int.parse(printRotation),
       textFontSize: textFontSize,
       textFontFamily: textFontFamily,
@@ -591,7 +596,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
       feedLines: feedLines,
       fitMode: fitMode,
       contentAlignment: contentAlignment,
-      commandType: 'esc',
+      commandType: commandType,
       printColor: 'black',
       printRotationDegrees: int.parse(printRotation),
     );
@@ -610,7 +615,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
       return;
     }
 
-    final colorPrinted = await printPdfWithColorFallbackCommands(
+    final colorResult = await printPdfWithColorResult(
       context: context,
       pdfPath: selectedPdfPath!,
       paperWidth: selectedPaperWidth,
@@ -622,13 +627,21 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
       feedLines: feedLines,
       fitMode: fitMode,
       contentAlignment: contentAlignment,
-      commandType: 'esc',
+      commandType: commandType,
       printColor: mode == PrintColorMode.red ? 'red' : 'black_red',
       printRotationDegrees: int.parse(printRotation),
     );
     if (!mounted) return;
-    if (colorPrinted) {
+    if (colorResult.success) {
       _showMessage(context, _messagePrintSuccess);
+      return;
+    }
+
+    if (colorResult.hasPrintedPages) {
+      _showMessage(
+        context,
+        'تعذر إكمال طباعة PDF الملونة. تم إيقاف التحويل التلقائي للأسود لتجنب إعادة الطباعة.',
+      );
       return;
     }
 
@@ -725,44 +738,55 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   }
 
   Future<void> _handlePrintPressed() async {
-    final normalizedMac = _normalizeMacAddress(macController.text);
-    if (normalizedMac.isEmpty) {
-      _showMessage(context, 'تعذر الاتصال بالطابعة');
+    if (_isPrinting) {
+      _showMessage(context, 'الطباعة قيد التنفيذ');
       return;
     }
-    if (macController.text.trim() != normalizedMac) {
-      _updateSettings(() => macController.text = normalizedMac);
-    }
+    setState(() => _isPrinting = true);
+    try {
+      final normalizedMac = _normalizeMacAddress(macController.text);
+      if (normalizedMac.isEmpty) {
+        _showMessage(context, 'تعذر الاتصال بالطابعة');
+        return;
+      }
+      if (macController.text.trim() != normalizedMac) {
+        _updateSettings(() => macController.text = normalizedMac);
+      }
 
-    final selectedPaperWidth = _parsedPaperWidth();
-    if (selectedPaperWidth == null) {
-      _showMessage(context, 'تعذر الاتصال بالطابعة');
-      return;
-    }
+      final selectedPaperWidth = _parsedPaperWidth();
+      if (selectedPaperWidth == null) {
+        _showMessage(context, 'تعذر الاتصال بالطابعة');
+        return;
+      }
 
-    final mode = printColorModeFromValue(printColor);
+      final mode = printColorModeFromValue(printColor);
 
-    if (selectedPdfPath != null) {
-      await _handlePdfPrintByMode(
+      if (selectedPdfPath != null) {
+        await _handlePdfPrintByMode(
+          mode: mode,
+          normalizedMac: normalizedMac,
+          selectedPaperWidth: selectedPaperWidth,
+        );
+        return;
+      }
+
+      final text = textController.text.trim();
+      if (text.isEmpty) {
+        _showMessage(context, _messageTextRequired);
+        return;
+      }
+
+      await _handleTextPrintByMode(
         mode: mode,
+        text: text,
         normalizedMac: normalizedMac,
         selectedPaperWidth: selectedPaperWidth,
       );
-      return;
+    } finally {
+      if (mounted) {
+        setState(() => _isPrinting = false);
+      }
     }
-
-    final text = textController.text.trim();
-    if (text.isEmpty) {
-      _showMessage(context, _messageTextRequired);
-      return;
-    }
-
-    await _handleTextPrintByMode(
-      mode: mode,
-      text: text,
-      normalizedMac: normalizedMac,
-      selectedPaperWidth: selectedPaperWidth,
-    );
   }
 
   @override
@@ -999,7 +1023,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                               ),
                               icon: const Icon(Icons.print, size: 22),
                               label: const Text('طباعة'),
-                              onPressed: _handlePrintPressed,
+                              onPressed: _isPrinting ? null : _handlePrintPressed,
                             ),
                           ),
                         ],
