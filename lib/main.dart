@@ -46,7 +46,7 @@ class NPrinterBluetoothOnlyApp extends StatelessWidget {
           data: updatedData,
           child: Stack(
             children: [
-              if (child != null) child,
+              ?child,
               Positioned(
                 left: 0,
                 right: 0,

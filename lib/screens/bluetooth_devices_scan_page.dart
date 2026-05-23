@@ -33,6 +33,7 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
   String _pairedSearchQuery = '';
   String _nearbySearchQuery = '';
   String? _pairingMac;
+  bool _isReturningToHome = false;
 
   bool get _isSupported =>
       !kIsWeb &&
@@ -54,6 +55,51 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
     _pairedSearchController.dispose();
     _nearbySearchController.dispose();
     super.dispose();
+  }
+
+  Future<bool> _handlePairingCompletionFromSystem(
+    String mac, {
+    int maxAttempts = 8,
+    Duration retryDelay = const Duration(milliseconds: 700),
+  }) async {
+    final normalizedMac = _normalizeMac(mac);
+    if (normalizedMac.isEmpty || _isReturningToHome) {
+      return false;
+    }
+
+    for (var attempt = 0; attempt < maxAttempts; attempt++) {
+      final isPaired = await _isDevicePairedNow(normalizedMac);
+      if (isPaired) {
+        _isReturningToHome = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) {
+            return;
+          }
+          final navigator = Navigator.of(context);
+          if (navigator.canPop()) {
+            navigator.pop(normalizedMac);
+          }
+        });
+        return true;
+      }
+
+      if (attempt < maxAttempts - 1) {
+        await Future<void>.delayed(retryDelay);
+      }
+    }
+
+    return false;
+  }
+
+  Future<bool> _isDevicePairedNow(String normalizedMac) async {
+    try {
+      final paired = await PrintBluetoothThermal.pairedBluetooths;
+      return paired.any(
+        (device) => _normalizeMac(device.macAdress) == normalizedMac,
+      );
+    } catch (_) {
+      return false;
+    }
   }
 
   void _handlePairedSearchChanged() {
@@ -375,11 +421,12 @@ class _BluetoothDevicesScanPageState extends State<BluetoothDevicesScanPage> {
       }
       if (paired) {
         _showMessage('تم الاقتران بنجاح. سيتم اختيار الجهاز.');
-        await _refreshDevices();
-        if (mounted) {
-          Navigator.pop(context, mac);
-        }
+        await _handlePairingCompletionFromSystem(mac);
       } else {
+        await _handlePairingCompletionFromSystem(mac);
+        if (!mounted || _isReturningToHome) {
+          return;
+        }
         _showMessage(
           'تعذر الاقتران. تأكد أن الطابعة في وضع الاقتران والرمز صحيح.',
         );

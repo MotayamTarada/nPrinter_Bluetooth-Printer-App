@@ -23,27 +23,19 @@ void _drawBorderAroundTextBounds({
   required Canvas canvas,
   required double imageWidth,
   required double imageHeight,
-  required double textX,
   required double textY,
-  required double textWidth,
   required double textHeight,
 }) {
   const borderPadding = 10.0;
   const safeInset = 1.0;
 
-  var left = textX - borderPadding;
+  final left = safeInset;
   var top = textY - borderPadding;
-  var right = textX + textWidth + borderPadding;
+  final right = imageWidth - safeInset;
   var bottom = textY + textHeight + borderPadding;
 
-  if (left < safeInset) {
-    left = safeInset;
-  }
   if (top < safeInset) {
     top = safeInset;
-  }
-  if (right > imageWidth - safeInset) {
-    right = imageWidth - safeInset;
   }
   if (bottom > imageHeight - safeInset) {
     bottom = imageHeight - safeInset;
@@ -192,9 +184,7 @@ Future<ui.Image> generateSimpleTextImage(
       canvas: canvas,
       imageWidth: width,
       imageHeight: height,
-      textX: textX,
       textY: textY,
-      textWidth: tp.width,
       textHeight: tp.height,
     );
   }
@@ -256,9 +246,7 @@ Future<ui.Image> generateTaggedTextImage(
       canvas: canvas,
       imageWidth: width,
       imageHeight: height,
-      textX: textX,
       textY: textY,
-      textWidth: tp.width,
       textHeight: tp.height,
     );
   }
@@ -324,9 +312,7 @@ Future<ui.Image> generateTaggedTextLayerImage(
       canvas: canvas,
       imageWidth: width,
       imageHeight: height,
-      textX: textX,
       textY: textY,
-      textWidth: tp.width,
       textHeight: tp.height,
     );
   }

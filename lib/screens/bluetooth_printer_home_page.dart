@@ -39,6 +39,8 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   static const String _printTextKey = 'printer.printText';
   static const String _customPaperWidthKey = 'printer.customPaperWidth';
   static const String _defaultPrintText = 'nPrinter';
+  static const String _defaultPaperWidth = '80';
+  static const int _defaultBeepTypeIndex = 2;
   static const String _messagePrintSuccess = 'تمت الطباعة بنجاح';
   static const String _messageTextRequired = 'الرجاء إدخال نص للطباعة';
   static const String _messageRedFallback =
@@ -104,11 +106,11 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     'cpcl',
   ];
 
-  String paperWidth = '58';
+  String paperWidth = _defaultPaperWidth;
   int beepBefore = 0;
   int beepAfter = 0;
   int feedLines = 0;
-  String beepType = '0x07';
+  String beepType = _allowedBeepTypes[_defaultBeepTypeIndex];
   bool cutPaper = false;
   bool textBorder = false;
   String fitMode = 'fit_width';
@@ -203,7 +205,9 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
 
   String _validatedPaperWidth(String value) {
     final normalized = value.trim().toLowerCase();
-    return _allowedPaperWidths.contains(normalized) ? normalized : '58';
+    return _allowedPaperWidths.contains(normalized)
+        ? normalized
+        : _defaultPaperWidth;
   }
 
   String _validatedCustomPaperWidth(String value) {
@@ -216,7 +220,9 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   }
 
   String _validatedBeepType(String value) {
-    return _allowedBeepTypes.contains(value) ? value : '0x07';
+    return _allowedBeepTypes.contains(value)
+        ? value
+        : _allowedBeepTypes[_defaultBeepTypeIndex];
   }
 
   String _validatedFitMode(String value) {
@@ -794,7 +800,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
     final mediaQuery = MediaQuery.of(context);
     final width = mediaQuery.size.width;
     final supportsScan = _isBluetoothScanSupported;
-    final bottomSafeSpacing = mediaQuery.viewPadding.bottom + 56;
+    final bottomSafeSpacing = mediaQuery.viewPadding.bottom + 12;
 
     return Scaffold(
       appBar: AppBar(
@@ -803,7 +809,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
         backgroundColor: const Color(0xffB0DCFE),
       ),
       body: SafeArea(
-        bottom: true,
+        bottom: false,
         child: SingleChildScrollView(
           padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + bottomSafeSpacing),
           child: Directionality(
