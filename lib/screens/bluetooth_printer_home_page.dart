@@ -135,6 +135,8 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   final textFocusNode = FocusNode();
   SharedPreferences? _prefs;
   bool _isRestoringPreferences = false;
+  bool get _isBeepTypeEnabled =>
+      beepType != _allowedBeepTypes[_defaultBeepTypeIndex];
 
   bool get _isBluetoothScanSupported =>
       !kIsWeb &&
@@ -1243,16 +1245,18 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                     onChanged: (value) =>
                         _updateSettings(() => textBorder = value),
                   ),
-                  _counterRow(
-                    'عدد الصفارات قبل الطباعة',
-                    beepBefore,
-                    (v) => _updateSettings(() => beepBefore = v),
-                  ),
-                  _counterRow(
-                    'عدد الصفارات بعد الطباعة',
-                    beepAfter,
-                    (v) => _updateSettings(() => beepAfter = v),
-                  ),
+                  if (_isBeepTypeEnabled) ...[
+                    _counterRow(
+                      'عدد الصفارات قبل الطباعة',
+                      beepBefore,
+                      (v) => _updateSettings(() => beepBefore = v),
+                    ),
+                    _counterRow(
+                      'عدد الصفارات بعد الطباعة',
+                      beepAfter,
+                      (v) => _updateSettings(() => beepAfter = v),
+                    ),
+                  ],
                   _counterRow(
                     'عدد أسطر التغذية',
                     feedLines,
