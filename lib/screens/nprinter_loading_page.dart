@@ -40,6 +40,15 @@ class NPrinterLoadingPage extends StatelessWidget {
                 height: 28,
                 child: CircularProgressIndicator(strokeWidth: 2.8),
               ),
+              const SizedBox(height: 10),
+              const Text(
+                'V1001',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Colors.black45,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
             ],
           ),
         ),
