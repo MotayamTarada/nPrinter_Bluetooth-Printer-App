@@ -42,7 +42,7 @@ class NPrinterLoadingPage extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               const Text(
-                'V1001',
+                'V1002',
                 style: TextStyle(
                   fontSize: 11,
                   color: Colors.black45,

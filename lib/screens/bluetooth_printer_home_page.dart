@@ -55,6 +55,7 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   static const String _textFontFamilyKey = 'printer.textFontFamily';
   static const String _customPaperWidthValue = 'custom';
   static const String _defaultCustomPaperWidth = '112';
+  static const double _dropdownMenuMaxHeight = 280;
   static const List<String> _allowedPaperWidths = <String>[
     '58',
     '80',
@@ -1031,7 +1032,9 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
                               ),
                               icon: const Icon(Icons.print, size: 22),
                               label: const Text('طباعة'),
-                              onPressed: _isPrinting ? null : _handlePrintPressed,
+                              onPressed: _isPrinting
+                                  ? null
+                                  : _handlePrintPressed,
                             ),
                           ),
                         ],
@@ -1337,16 +1340,34 @@ class _BluetoothPrinterHomePageState extends State<BluetoothPrinterHomePage> {
   }
 
   Widget _textFontFamilyField() {
+    final orderedFonts = List<String>.from(_allowedTextFontFamilies)
+      ..sort(
+        (a, b) => _textFontFamilyLabel(a).compareTo(_textFontFamilyLabel(b)),
+      );
+    if (orderedFonts.remove('NotoKufiArabicBold')) {
+      orderedFonts.insert(0, 'NotoKufiArabicBold');
+    }
+
     return DropdownButtonFormField<String>(
       initialValue: textFontFamily,
       isDense: true,
       isExpanded: true,
+      menuMaxHeight: _dropdownMenuMaxHeight,
+      itemHeight: 56,
+      style: const TextStyle(fontSize: 16, height: 1.2, color: Colors.black87),
       decoration: _dropdownFieldDecoration(),
-      items: _allowedTextFontFamilies
+      items: orderedFonts
           .map(
             (value) => DropdownMenuItem(
               value: value,
-              child: Text(_textFontFamilyLabel(value)),
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: Text(
+                  _textFontFamilyLabel(value),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ),
           )
           .toList(),
